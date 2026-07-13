@@ -4,9 +4,9 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::{
     State,
-    auth::login,
+    auth::{AUTHORIZATION, login},
     command::{ClonedCommand, Command},
-    notify::{NOTIFICATIONS, QuickNotify},
+    notify::{QuickNotify, notify},
 };
 
 pub(crate) fn create() -> Command {
@@ -14,6 +14,10 @@ pub(crate) fn create() -> Command {
         "login".into(),
         "Login with email and password".into(),
         crate::command::CommandGroup::Other,
+        || async move {
+            let authorization = AUTHORIZATION.lock().expect("AUTHORIZATION is poisoned");
+            Ok(authorization.is_logged_in())
+        },
         Vec::default(),
         None,
         |state: Arc<Mutex<State>>| async move {
@@ -29,29 +33,22 @@ pub(crate) fn create() -> Command {
                 Ok(a) => a,
                 Err(e) => {
                     let err_msg = format!("Error while attempting to retrieve auth token: {:?}", e);
-                    return Err(NOTIFICATIONS
-                        .lock()
-                        .expect("NOTIFICATIONS is poisoned")
-                        .error(err_msg));
+                    return Err(notify().error(err_msg));
                 }
             };
 
-            if let Some(auth) = &mut state.lock().await.authentication_state {
-                auth.update(authorization);
-            } else {
-                state.lock().await.authentication_state = Some(authorization);
-            }
+            let mut auth = match AUTHORIZATION.lock() {
+                Ok(auth) => auth,
+                Err(e) => return Err(notify().error(e).to_string()),
+            };
+            auth.update(authorization);
 
-            let a = &state.lock().await.authentication_state;
-            NOTIFICATIONS
-                .lock()
-                .expect("NOTIFICATIONS is poisoned")
-                .success(&format!(
-                    "Login succeeded as {}",
-                    a.as_ref().unwrap().get_display_name().clone()
-                ));
+            notify().success(&format!(
+                "Login succeeded as {}",
+                auth.get_display_name().clone()
+            ));
 
-            a.as_ref().expect("Something bad happened").save_to_disk();
+            auth.save_to_disk();
 
             Ok(String::default())
         },
@@ -69,10 +66,7 @@ async fn prompt_user_password(state: &Arc<Mutex<State>>) -> Result<String, Strin
         });
     let Ok((password, _)) = recv.await else {
         let err_msg = format!("recv.await returns Error: {}", line!());
-        return Err(NOTIFICATIONS
-            .lock()
-            .expect("NOTIFICATIONS is poisoned")
-            .error(err_msg));
+        return Err(notify().error(err_msg));
     };
     if password.is_empty() {
         return Err("password is empty".into());
@@ -91,10 +85,7 @@ async fn prompt_user_email(state: &Arc<Mutex<State>>) -> Result<String, String> 
         });
     let Ok((email, _)) = recv.await else {
         let err_msg = format!("recv.await returns Error: {}", line!());
-        return Err(NOTIFICATIONS
-            .lock()
-            .expect("NOTIFICATIONS is poisoned")
-            .error(err_msg));
+        return Err(notify().error(err_msg));
     };
     if email.is_empty() {
         return Err("email is empty".into());

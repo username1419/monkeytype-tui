@@ -8,7 +8,6 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 
 use crate::auth::Authorization;
-use crate::auth::is_logged_in;
 
 fn sample_auth() -> Authorization {
     Authorization::new(
@@ -109,24 +108,6 @@ fn from_refresh_response_parses_token_json() {
     assert_eq!(auth.get_refresh_token(), "\"refresh-abc\"");
     assert_eq!(auth.get_user_id(), "\"uid-1\"");
     assert_eq!(auth.get_project_id(), "\"proj-1\"");
-}
-
-#[test]
-fn is_logged_in_checks_refresh_token_file_in_working_directory() {
-    let dir = env::temp_dir().join(format!("typing_tui_auth_test_{}", std::process::id()));
-    let _ = remove_dir_all(&dir);
-    create_dir_all(&dir).unwrap();
-
-    let original = env::current_dir().unwrap();
-    env::set_current_dir(&dir).unwrap();
-
-    assert!(!is_logged_in());
-
-    write(dir.join("refresh_token"), "token").unwrap();
-    assert!(is_logged_in());
-
-    env::set_current_dir(&original).unwrap();
-    let _ = remove_dir_all(&dir);
 }
 
 #[tokio::test]

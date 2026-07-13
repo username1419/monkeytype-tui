@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use tokio::{spawn, sync::Mutex, task::JoinHandle};
+use tokio::{runtime::Handle, spawn, sync::Mutex, task::JoinHandle};
 
 use crate::{State, callbacks::initialize_all};
 use std::{fmt::Debug, pin::Pin, sync::Arc};
@@ -8,11 +8,19 @@ pub(crate) static ROOT_COMMANDS: Lazy<Arc<[Command]>> = Lazy::new(|| initialize_
 
 #[derive(Debug)]
 pub(crate) struct Command {
+    /// Internal name for the command
     id: String,
+    /// Command name shown to user
     display_name: String,
+    /// The category the command belongs to, to filter based on user needs
     group: CommandGroup,
+    /// The condition in which the command is shown
+    display_condition: Condition,
+    /// Sub-options for the command
     options: Vec<String>,
+    /// The selected sub-option
     selected_option: Option<String>,
+    /// Callback which executes when the command is selected
     handler: CommandCallback,
 }
 
@@ -36,6 +44,7 @@ impl Command {
         id: String,
         display_name: String,
         group: CommandGroup,
+        display_condition: impl Into<Condition>,
         options: Vec<String>,
         selected_option: Option<String>,
         handler: impl Into<CommandCallback>,
@@ -44,6 +53,7 @@ impl Command {
             id,
             display_name,
             group,
+            display_condition: display_condition.into(),
             options,
             selected_option,
             handler: handler.into(),
@@ -120,6 +130,14 @@ impl Fuzzy for [Command] {
                 return;
             }
 
+            // NOTE: this is potentially more runtime expensive than the above check so we run it later
+            // i think
+            let handle = Handle::current();
+            let display = handle.block_on(command.display_condition.inner.as_ref()());
+            if display.is_err() || display.is_ok_and(|display| !display) {
+                return;
+            }
+
             if v.len() < options as usize {
                 v.push((match_strength, idx));
                 return;
@@ -166,5 +184,31 @@ where
 impl Debug for CommandCallback {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("callback")
+    }
+}
+
+pub struct Condition {
+    #[allow(clippy::complexity)]
+    pub(super) inner:
+        Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send>> + Sync + Send>,
+}
+
+impl<F, Fut> From<F> for Condition
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<bool, String>> + Send + 'static,
+{
+    fn from(inner: F) -> Self {
+        Self {
+            inner: Box::new(move || {
+                Box::pin(inner()) as Pin<Box<dyn Future<Output = Result<bool, String>> + Send>>
+            }),
+        }
+    }
+}
+
+impl Debug for Condition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("condition")
     }
 }
