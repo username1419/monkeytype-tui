@@ -1,16 +1,13 @@
 use std::fmt::Debug;
 
+use crate::{
+    command::{ClonedCommand, Command, Fuzzy, ROOT_COMMANDS},
+    traits::UpdateableWidget,
+};
 use ratatui::{
     layout::{Position, Rect},
     style::{Style, Stylize},
     widgets::{Block, Paragraph, Wrap},
-};
-use tokio::spawn;
-
-use crate::{
-    command::{ClonedCommand, Command, Fuzzy, ROOT_COMMANDS},
-    notify::{NOTIFICATIONS, QuickNotify},
-    traits::UpdateableWidget,
 };
 
 #[derive(Debug)]
@@ -312,7 +309,7 @@ impl UpdateableWidget for CommandLine {
         );
     }
 
-    fn update(&mut self) {
+    async fn update(&mut self) {
         if !self.enabled || !self.search {
             return;
         }

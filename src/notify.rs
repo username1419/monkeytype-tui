@@ -10,82 +10,105 @@ use std::{
     sync::{LazyLock, Mutex, OnceLock},
     time::{Duration, Instant},
 };
-use tokio::sync::{
-    Semaphore,
-    mpsc::{self, *},
+use tokio::{
+    spawn,
+    sync::{
+        Semaphore,
+        mpsc::{self, Receiver, Sender},
+    },
 };
 
-use crate::traits::UpdateableWidget;
 #[derive(Debug)]
 struct MutableMpscReceiver(UnsafeCell<Receiver<Notification>>);
 unsafe impl Sync for MutableMpscReceiver {}
 
-// TODO: make this private and create a send/receive channel to insert messages
+impl MutableMpscReceiver {
+    fn try_recv(&self) -> Option<Notification> {
+        unsafe { (*self.0.get()).try_recv().ok() }
+    }
+}
+
 static NOTIFICATIONS: Lazy<Mutex<Vec<Notification>>> =
     Lazy::new(|| Mutex::new(Vec::with_capacity(12)));
 
-static NOTIFICATION_RECEIVER: OnceLock<MutableMpscReceiver> = OnceLock::new();
-
-pub(crate) static NOTIFICATION_SENDER: LazyLock<Sender<Notification>> = LazyLock::new(|| {
+static NOTIFICATION_RECEIVER: LazyLock<MutableMpscReceiver> = LazyLock::new(|| {
     // NOTE: if we exceed this, were probably already fucked anyways
     let (tx, rx) = mpsc::channel(Semaphore::MAX_PERMITS);
-    NOTIFICATION_RECEIVER
-        .set(MutableMpscReceiver(UnsafeCell::new(rx)))
+    NOTIFICATION_SENDER
+        .set(tx)
         .expect("channel already initialized");
-    tx
+    MutableMpscReceiver(UnsafeCell::new(rx))
 });
 
+static NOTIFICATION_SENDER: OnceLock<Sender<Notification>> = OnceLock::new();
+
+fn receiver() -> *mut Receiver<Notification> {
+    NOTIFICATION_RECEIVER.0.get()
+}
+
 pub(crate) struct NotificationManager;
+
 impl NotificationManager {
-    fn render(frame: &mut ratatui::Frame, frame_width: u16, frame_height: u16) {
-        let area = frame.area();
-
-        let mut running_length = 0_u16;
-        let notifications = NOTIFICATIONS.lock().unwrap();
-        for notification in notifications.iter().rev() {
-            let color = match notification.level {
-                NotifLevel::Success => Color::Green,
-                NotifLevel::Error => Color::Red,
-                NotifLevel::Warning | NotifLevel::Debug => Color::Yellow,
-                NotifLevel::Info => Color::Cyan,
-            };
-
-            let height =
-                f64::ceil(notification.message.len() as f64 / NOTIFICATION_WIDTH as f64) as u16 + 2;
-            let popup_area = Rect {
-                x: area.width.saturating_sub(NOTIFICATION_WIDTH),
-                y: running_length,
-                width: NOTIFICATION_WIDTH,
-                height,
-            };
-
-            let paragraph = Paragraph::new(notification.message.as_str())
-                .wrap(Wrap { trim: true })
-                .white()
-                .block(
-                    Block::bordered()
-                        .title(format!("{}: {}", notification.level, notification.title))
-                        .title_alignment(Alignment::Left)
-                        .border_style(Style::default().fg(color))
-                        .border_type(BorderType::Rounded),
-                )
-                .right_aligned();
-
-            frame.render_widget(paragraph, popup_area);
-
-            running_length += height;
+    pub(crate) fn try_render(frame: &mut ratatui::Frame, _frame_width: u16, _frame_height: u16) {
+        if let Ok(notifications) = NOTIFICATIONS.try_lock() {
+            render_notifications(&notifications, frame);
         }
     }
 
-    unsafe fn update() {
-        let recv = NOTIFICATION_RECEIVER.get_mut();
+    // NOTE: DO NOT CALL THIS TWICE, OR OUTSIDE OF UPDATE THREAD
+    pub(crate) async fn update() {
         let mut notifications = NOTIFICATIONS.lock().unwrap();
 
+        while let Ok(notification) = (unsafe { &mut *receiver() }).try_recv() {
+            notifications.push(notification);
+        }
+
         for idx in (0..notifications.len()).rev() {
-            if notifications[idx].expires_at - Instant::now() == Duration::ZERO {
+            if notifications[idx].expires_at <= Instant::now() {
                 notifications.remove(idx);
             }
         }
+    }
+}
+
+const NOTIFICATION_WIDTH: u16 = 40;
+
+fn render_notifications(notifications: &[Notification], frame: &mut ratatui::Frame) {
+    let area = frame.area();
+    let mut running_length = 0_u16;
+
+    for notification in notifications.iter().rev() {
+        let color = match notification.level {
+            NotifLevel::Success => Color::Green,
+            NotifLevel::Error => Color::Red,
+            NotifLevel::Warning | NotifLevel::Debug => Color::Yellow,
+            NotifLevel::Info => Color::Cyan,
+        };
+
+        let height =
+            f64::ceil(notification.message.len() as f64 / NOTIFICATION_WIDTH as f64) as u16 + 2;
+        let popup_area = Rect {
+            x: area.width.saturating_sub(NOTIFICATION_WIDTH),
+            y: running_length,
+            width: NOTIFICATION_WIDTH,
+            height,
+        };
+
+        let paragraph = Paragraph::new(notification.message.as_str())
+            .wrap(Wrap { trim: true })
+            .white()
+            .block(
+                Block::bordered()
+                    .title(format!("{}: {}", notification.level, notification.title))
+                    .title_alignment(Alignment::Left)
+                    .border_style(Style::default().fg(color))
+                    .border_type(BorderType::Rounded),
+            )
+            .right_aligned();
+
+        frame.render_widget(paragraph, popup_area);
+
+        running_length += height;
     }
 }
 
@@ -138,73 +161,37 @@ impl Display for NotifLevel {
     }
 }
 
-const NOTIFICATION_WIDTH: u16 = 40;
-impl UpdateableWidget for Vec<Notification> {
-    fn render(&self, frame: &mut ratatui::Frame, frame_width: u16, frame_height: u16) {
-        let area = frame.area();
-
-        let mut running_length = 0_u16;
-        for notification in self.iter().rev() {
-            let color = match notification.level {
-                NotifLevel::Success => Color::Green,
-                NotifLevel::Error => Color::Red,
-                NotifLevel::Warning | NotifLevel::Debug => Color::Yellow,
-                NotifLevel::Info => Color::Cyan,
-            };
-
-            let height =
-                f64::ceil(notification.message.len() as f64 / NOTIFICATION_WIDTH as f64) as u16 + 2;
-            let popup_area = Rect {
-                x: area.width.saturating_sub(NOTIFICATION_WIDTH),
-                y: running_length,
-                width: NOTIFICATION_WIDTH,
-                height,
-            };
-
-            let paragraph = Paragraph::new(notification.message.as_str())
-                .wrap(Wrap { trim: true })
-                .white()
-                .block(
-                    Block::bordered()
-                        .title(format!("{}: {}", notification.level, notification.title))
-                        .title_alignment(Alignment::Left)
-                        .border_style(Style::default().fg(color))
-                        .border_type(BorderType::Rounded),
-                )
-                .right_aligned();
-
-            frame.render_widget(paragraph, popup_area);
-
-            running_length += height;
-        }
-    }
-
-    fn update(&mut self) {
-        let recv = NOTIFICATION_RECEIVER.get_mut().unwrap();
-
-        for idx in (0..self.len()).rev() {
-            if self[idx].expires_at - Instant::now() == Duration::ZERO {
-                self.remove(idx);
-            }
-        }
-    }
-}
-
 const DEFAULT_QUICKNOTIFY_DURATION: Duration = Duration::from_secs(4);
+
 pub(crate) trait QuickNotify {
-    fn debug<T: std::fmt::Debug>(&mut self, o: T) -> T;
-    fn info<T: std::fmt::Display>(&mut self, o: T) -> T;
-    fn error<T: std::fmt::Display>(&mut self, o: T) -> T;
-    fn enotify(&mut self, s: &str);
+    fn debug<T: Debug>(&mut self, o: T) -> T;
+    fn info<T: Display>(&mut self, o: T) -> T;
+    fn error<T: Display>(&mut self, o: T) -> T;
+    fn enotify<T: Display>(&mut self, s: T);
     fn todo(&mut self);
     fn success(&mut self, s: &str);
 }
 
-impl QuickNotify for Vec<Notification> {
-    fn debug<T: std::fmt::Debug>(&mut self, o: T) -> T {
-        self.push(
+pub(crate) struct Notify;
+
+pub(crate) fn notify() -> Notify {
+    Notify
+}
+
+pub(crate) fn send(notification: Notification) {
+    // NOTE: NOTIFICATION_RECEIVER initializes itself and NOTIFICATION_SENDER in the update thread,
+    // so this unwrap will never fail
+    let sender = NOTIFICATION_SENDER.get().unwrap().clone();
+    spawn(async move {
+        let _ = sender.send(notification).await;
+    });
+}
+
+impl QuickNotify for Notify {
+    fn debug<T: Debug>(&mut self, o: T) -> T {
+        send(
             Notification::builder()
-                .message(&format!("{:?}", o))
+                .message(&format!("{o:?}"))
                 .duration(DEFAULT_QUICKNOTIFY_DURATION)
                 .notification_level(NotifLevel::Debug)
                 .build(),
@@ -212,10 +199,10 @@ impl QuickNotify for Vec<Notification> {
         o
     }
 
-    fn info<T: std::fmt::Display>(&mut self, o: T) -> T {
-        self.push(
+    fn info<T: Display>(&mut self, o: T) -> T {
+        send(
             Notification::builder()
-                .message(&format!("{}", o))
+                .message(&format!("{o}"))
                 .duration(DEFAULT_QUICKNOTIFY_DURATION)
                 .notification_level(NotifLevel::Info)
                 .build(),
@@ -223,11 +210,10 @@ impl QuickNotify for Vec<Notification> {
         o
     }
 
-    fn error<T: std::fmt::Display>(&mut self, o: T) -> T {
-        // NOTE: ideally wed like to use macro line!() but im stupid and dont know how to write macros
-        self.push(
+    fn error<T: Display>(&mut self, o: T) -> T {
+        send(
             Notification::builder()
-                .message(&format!("{}", o))
+                .message(&format!("{o}"))
                 .duration(DEFAULT_QUICKNOTIFY_DURATION)
                 .notification_level(NotifLevel::Error)
                 .build(),
@@ -235,10 +221,10 @@ impl QuickNotify for Vec<Notification> {
         o
     }
 
-    fn enotify(&mut self, s: &str) {
-        self.push(
+    fn enotify<T: Display>(&mut self, s: T) {
+        send(
             Notification::builder()
-                .message(s)
+                .message(&format!("{}", s))
                 .duration(DEFAULT_QUICKNOTIFY_DURATION)
                 .notification_level(NotifLevel::Error)
                 .build(),
@@ -246,7 +232,7 @@ impl QuickNotify for Vec<Notification> {
     }
 
     fn todo(&mut self) {
-        self.push(
+        send(
             Notification::builder()
                 .message(&format!(
                     "[{}:{} {}]: not yet implemented",
@@ -261,7 +247,7 @@ impl QuickNotify for Vec<Notification> {
     }
 
     fn success(&mut self, s: &str) {
-        self.push(
+        send(
             Notification::builder()
                 .message(s)
                 .duration(DEFAULT_QUICKNOTIFY_DURATION)

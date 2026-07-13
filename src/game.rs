@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     State,
-    notify::{NOTIFICATIONS, QuickNotify},
+    notify::{QuickNotify, notify},
 };
 
 pub(crate) async fn event_keypressed(
@@ -15,6 +15,9 @@ pub(crate) async fn event_keypressed(
     match (key.modifiers, key.code) {
         (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
             state.lock().await.shutdown = true;
+        }
+        (KeyModifiers::CONTROL, KeyCode::F(10)) => {
+            notify().enotify("testing");
         }
         (KeyModifiers::NONE, KeyCode::Esc) => {
             let mut state = state.lock().await;
@@ -28,30 +31,21 @@ pub(crate) async fn event_keypressed(
             let mut state = state.lock().await;
             match state.commandline.is_enabled() {
                 true => state.commandline.register_character(c),
-                false => NOTIFICATIONS
-                    .lock()
-                    .expect("NOTIFICATIONS is poisoned")
-                    .todo(),
+                false => notify().todo(),
             }
         }
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
             let mut state = state.lock().await;
             match state.commandline.is_enabled() {
                 true => state.commandline.register_character(c.to_ascii_uppercase()),
-                false => NOTIFICATIONS
-                    .lock()
-                    .expect("NOTIFICATIONS is poisoned")
-                    .todo(),
+                false => notify().todo(),
             }
         }
         (KeyModifiers::NONE, KeyCode::Backspace) => {
             let mut state = state.lock().await;
             match state.commandline.is_enabled() {
                 true => state.commandline.register_delete_character(),
-                false => NOTIFICATIONS
-                    .lock()
-                    .expect("NOTIFICATIONS is poisoned")
-                    .todo(),
+                false => notify().todo(),
             }
         }
         (KeyModifiers::CONTROL, KeyCode::Char('h'))
@@ -59,10 +53,7 @@ pub(crate) async fn event_keypressed(
             let mut state = state.lock().await;
             match state.commandline.is_enabled() {
                 true => state.commandline.register_delete_word(),
-                false => NOTIFICATIONS
-                    .lock()
-                    .expect("NOTIFICATIONS is poisoned")
-                    .todo(),
+                false => notify().todo(),
             }
         }
         (KeyModifiers::NONE, KeyCode::Left) => {
@@ -100,7 +91,7 @@ pub(crate) async fn event_keypressed(
                 });
             }
         }
-        (mods, code) => {}
+        (_mods, _code) => {}
     }
 
     Ok(())

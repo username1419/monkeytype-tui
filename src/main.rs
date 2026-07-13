@@ -17,22 +17,24 @@ use std::{
 
 use crossterm::event::{self, EventStream};
 use ratatui::{
-    layout::{Alignment, Layout, Rect, Size},
+    layout::{Alignment, Rect, Size},
     style::Stylize,
-    text::Text,
     widgets::{Block, Paragraph, Wrap},
 };
 use tokio::{
-    sync::{Mutex, Notify},
-    time::{Instant, Sleep, sleep},
+    join, spawn,
+    sync::Mutex,
+    time::{Instant, sleep},
 };
 use tokio_stream::StreamExt;
 use tokio_util::task::TaskTracker;
 
 use crate::{
-    auth::Authorization, callbacks::initialize_all, notify::NOTIFICATIONS, traits::UpdateableWidget,
+    auth::{AUTHORIZATION, Authorization, refresh_from_file},
+    notify::{NotificationManager, notify},
+    traits::UpdateableWidget,
 };
-use crate::{commandline::CommandLine, notify::Notification};
+use crate::{commandline::CommandLine, notify::QuickNotify};
 
 #[derive(Default, Debug)]
 enum Action {
@@ -52,7 +54,6 @@ struct State {
     words_list: Vec<String>,
     current_word_list: Vec<String>,
     target_word_list: Vec<String>,
-    authentication_state: Option<Authorization>,
     shutdown: bool,
     terminal_size: Size,
 }
@@ -67,8 +68,17 @@ const KEY_UPDATE_RATE: Duration = Duration::from_millis(1);
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let mut state = State::default();
+    let mut authorization = Authorization::default();
 
-    if cfg!(debug_assertions) {
+    if let Ok(a) = refresh_from_file() {
+        authorization = a;
+    }
+
+    #[cfg(feature = "profiling")]
+    console_subscriber::init();
+
+    #[cfg(debug_assertions)]
+    {
         read_to_string("../.env")
             .inspect(|contents| {
                 let mut api_key = String::default();
@@ -99,7 +109,7 @@ async fn main() -> std::io::Result<()> {
                     }
                 }
 
-                state.authentication_state = Some(Authorization::new(
+                authorization = Authorization::new(
                     api_key,
                     display_name,
                     access_token,
@@ -109,11 +119,12 @@ async fn main() -> std::io::Result<()> {
                     refresh_token,
                     user_id,
                     project_id,
-                ));
+                );
             })
             .ok();
     }
 
+    *AUTHORIZATION.lock().unwrap() = authorization;
     let state = Arc::new(Mutex::new(state));
     let tracker = TaskTracker::new();
 
@@ -178,9 +189,7 @@ async fn display(state: Arc<Mutex<State>>) -> Result<(), Box<dyn Error>> {
             }
 
             state.commandline.render(frame, width, height);
-            if let Ok(lock) = NOTIFICATIONS.try_lock() {
-                lock.render(frame, width, height);
-            }
+            NotificationManager::try_render(frame, width, height);
         })?;
 
         if state.shutdown {
@@ -219,7 +228,7 @@ async fn key_update(state: Arc<Mutex<State>>, tracker: TaskTracker) -> Result<()
                     game::event_keypressed(key_event, state).await.ok();
                 });
             }
-            event::Event::Mouse(mouse_event) => {}
+            event::Event::Mouse(_mouse_event) => {}
             event::Event::Paste(_) => todo!(),
             event::Event::Resize(_, _) => todo!(),
         }
@@ -231,7 +240,7 @@ async fn key_update(state: Arc<Mutex<State>>, tracker: TaskTracker) -> Result<()
     }
 }
 
-async fn update(state: Arc<Mutex<State>>, tracker: TaskTracker) -> Result<(), Box<dyn Error>> {
+async fn update(state: Arc<Mutex<State>>, _tracker: TaskTracker) -> Result<(), Box<dyn Error>> {
     let is_refreshing = Arc::new(AtomicBool::new(false));
     loop {
         let now = Instant::now();
@@ -239,39 +248,20 @@ async fn update(state: Arc<Mutex<State>>, tracker: TaskTracker) -> Result<(), Bo
         {
             let mut _state = state.lock().await;
 
-            NOTIFICATIONS.lock()?.update();
-            _state.commandline.update();
+            let (_, _) = join!(NotificationManager::update(), _state.commandline.update(),);
 
-            if let Some(authorization) = &mut _state.authentication_state
+            if let Ok(authorization) = AUTHORIZATION.lock()
                 && authorization.get_expire_instant() - now < Duration::from_mins(5)
                 && !is_refreshing.load(std::sync::atomic::Ordering::Relaxed)
             {
-                is_refreshing.store(false, std::sync::atomic::Ordering::Relaxed);
-                let s = state.clone();
+                is_refreshing.store(true, std::sync::atomic::Ordering::Relaxed);
                 let i = is_refreshing.clone();
-                authorization
-                    .refresh(move |auth| {
-                        match auth {
-                            Ok(a) => s
-                                .blocking_lock()
-                                .authentication_state
-                                .as_mut()
-                                .unwrap()
-                                .update(a),
-                            Err(e) => NOTIFICATIONS
-                                .lock()
-                                .expect("NOTIFICATIONS is poisoned")
-                                .push(
-                                    Notification::builder()
-                                        .message(&format!("{:?}", e))
-                                        .duration(Duration::from_secs(4))
-                                        .notification_level(notify::NotifLevel::Error)
-                                        .build(),
-                                ),
-                        };
-                        i.store(false, std::sync::atomic::Ordering::Relaxed);
-                    })
-                    .await;
+                spawn(async move {
+                    let _ = Authorization::refresh_non_blocking()
+                        .await
+                        .inspect_err(|e| notify().enotify(e));
+                    i.store(false, std::sync::atomic::Ordering::Relaxed);
+                });
             }
         }
 
