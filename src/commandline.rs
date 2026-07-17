@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use crate::{
     command::{ClonedCommand, Command, Fuzzy, ROOT_COMMANDS},
+    notify,
     traits::UpdateableWidget,
 };
 use ratatui::{
@@ -167,7 +168,7 @@ impl CommandLine {
 
         let cloned_command = command.iter().map(|c| (*c).clone()).next();
         if let Some(callback) = self.submit_callback.take() {
-            callback.0(self.input.clone(), cloned_command);
+            callback.0(self.input.clone(), notify::debug!(cloned_command));
         }
 
         callback(self.input.clone(), command);
@@ -325,7 +326,7 @@ impl UpdateableWidget for CommandLine {
             false => &self.commands,
         };
 
-        let filter = c.find_fuzzy(&self.input, MAX_OPTIONS);
+        let filter = c.find_fuzzy(&self.input, MAX_OPTIONS).await;
 
         self.matched_commands = filter;
         if self.selected_command.is_none() && !self.matched_commands.is_empty() {

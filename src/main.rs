@@ -3,19 +3,26 @@ pub(crate) mod callbacks;
 pub mod command;
 pub mod commandline;
 pub mod game;
+pub(crate) mod github;
 pub mod notify;
 pub mod settings;
+pub(crate) mod test;
 pub(crate) mod tests;
 pub mod traits;
 
 use std::{
+    env,
     error::Error,
-    fs::read_to_string,
+    fs::{create_dir_all, read_to_string, remove_dir_all, write},
+    io::{Read, stdin},
+    path::PathBuf,
+    str::FromStr,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use crossterm::event::{self, EventStream};
+use once_cell::sync::Lazy;
 use ratatui::{
     layout::{Alignment, Rect, Size},
     style::Stylize,
@@ -31,7 +38,8 @@ use tokio_util::task::TaskTracker;
 
 use crate::{
     auth::{AUTHORIZATION, Authorization, refresh_from_file},
-    notify::{NotificationManager, notify},
+    notify::{NotificationManager, debug, enotify, notify},
+    test::TEST,
     traits::UpdateableWidget,
 };
 use crate::{commandline::CommandLine, notify::QuickNotify};
@@ -51,9 +59,6 @@ enum Action {
 struct State {
     action: Action,
     commandline: CommandLine,
-    words_list: Vec<String>,
-    current_word_list: Vec<String>,
-    target_word_list: Vec<String>,
     shutdown: bool,
     terminal_size: Size,
 }
@@ -65,12 +70,38 @@ const DISPLAY_RATE: Duration = Duration::from_micros(8333);
 /// NOTE: 1000fps
 const KEY_UPDATE_RATE: Duration = Duration::from_millis(1);
 
+const APP_NAME: &str = "monkeytype-tui";
+
+pub(crate) static CONFIG_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    let p = dirs::config_dir()
+        .expect("App configuration directory not found")
+        .join(APP_NAME);
+    create_dir_all(&p).expect("Configuration directory creation failed");
+    p
+});
+
+pub(crate) static DATA_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    let p = dirs::data_dir()
+        .expect("App data directory not found")
+        .join(APP_NAME);
+    create_dir_all(&p).expect("Data directory creation failed");
+    p
+});
+
+pub(crate) static CACHE_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    let p = dirs::cache_dir()
+        .expect("App cache directory not found")
+        .join(APP_NAME);
+    create_dir_all(&p).expect("Cache directory creation failed");
+    p
+});
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let mut state = State::default();
     let mut authorization = Authorization::default();
 
-    if let Ok(a) = refresh_from_file() {
+    if let Ok(a) = refresh_from_file().await {
         authorization = a;
     }
 
@@ -143,7 +174,26 @@ async fn main() -> std::io::Result<()> {
     tracker.close();
     tracker.wait().await;
     ratatui::restore();
-    println!();
+
+    if cfg!(debug_assertions) {
+        print!("(Dev) Remove app specific directories? [Y/n]: ");
+        let mut buf = [0_u8; 1];
+        if stdin().lock().read_exact(&mut buf).is_ok() {
+            match buf[0] {
+                0x0A | 0x59 => {
+                    remove_dir_all(DATA_DIR.as_path()).ok();
+                    println!("\nRemoved data directory");
+                    remove_dir_all(CONFIG_DIR.as_path()).ok();
+                    println!("Removed configuration directory");
+                    remove_dir_all(CACHE_DIR.as_path()).ok();
+                    println!("Removed cache directory");
+                }
+                _ => {
+                    println!("\naight")
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -165,11 +215,6 @@ async fn display(state: Arc<Mutex<State>>) -> Result<(), Box<dyn Error>> {
                 Rect::new(0, 0, 250, 250),
             );
 
-            frame.render_widget(
-                Paragraph::new(format!("{:?}", state.current_word_list)).wrap(Wrap { trim: true }),
-                Rect::new(width / 2, height / 2, 100, 100),
-            );
-
             if state.shutdown {
                 let mut rect = frame.area();
                 rect = rect.resize(Size::new(40, 4));
@@ -189,6 +234,9 @@ async fn display(state: Arc<Mutex<State>>) -> Result<(), Box<dyn Error>> {
             }
 
             state.commandline.render(frame, width, height);
+            if let Ok(t) = TEST.try_lock() {
+                t.render(frame, width, height);
+            }
             NotificationManager::try_render(frame, width, height);
         })?;
 
@@ -250,8 +298,10 @@ async fn update(state: Arc<Mutex<State>>, _tracker: TaskTracker) -> Result<(), B
 
             let (_, _) = join!(NotificationManager::update(), _state.commandline.update(),);
 
+            // TODO: debounce time for token refresh
             if let Ok(authorization) = AUTHORIZATION.lock()
                 && authorization.get_expire_instant() - now < Duration::from_mins(5)
+                && !authorization.get_refresh_token().is_empty()
                 && !is_refreshing.load(std::sync::atomic::Ordering::Relaxed)
             {
                 is_refreshing.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -259,7 +309,9 @@ async fn update(state: Arc<Mutex<State>>, _tracker: TaskTracker) -> Result<(), B
                 spawn(async move {
                     let _ = Authorization::refresh_non_blocking()
                         .await
-                        .inspect_err(|e| notify().enotify(e));
+                        .inspect_err(|e| {
+                            enotify!(format!("Error while refreshing access token: {}", e))
+                        });
                     i.store(false, std::sync::atomic::Ordering::Relaxed);
                 });
             }

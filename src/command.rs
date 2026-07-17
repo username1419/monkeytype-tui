@@ -1,7 +1,12 @@
 use once_cell::sync::Lazy;
-use tokio::{runtime::Handle, spawn, sync::Mutex, task::JoinHandle};
+use tokio::{
+    runtime::Handle,
+    spawn,
+    sync::{Mutex, oneshot},
+    task::JoinHandle,
+};
 
-use crate::{State, callbacks::initialize_all};
+use crate::{State, callbacks::initialize_all, notify::enotify};
 use std::{fmt::Debug, pin::Pin, sync::Arc};
 
 pub(crate) static ROOT_COMMANDS: Lazy<Arc<[Command]>> = Lazy::new(|| initialize_all().into());
@@ -80,7 +85,7 @@ impl Command {
         self.selected_option.as_ref()
     }
 
-    pub fn call(&self, state: Arc<Mutex<State>>) -> JoinHandle<Result<String, String>> {
+    pub fn call(&self, state: Arc<Mutex<State>>) -> JoinHandle<Result<(), String>> {
         spawn(self.handler.inner.as_ref()(state))
     }
 
@@ -95,7 +100,7 @@ impl Command {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ClonedCommand {
     id: String,
     display_name: String,
@@ -105,15 +110,15 @@ pub(crate) struct ClonedCommand {
 }
 
 pub(crate) trait Fuzzy {
-    fn find_fuzzy(&self, prompt: &str, options: u8) -> Vec<usize>;
+    async fn find_fuzzy(&self, prompt: &str, options: u8) -> Vec<usize>;
 }
 
 impl Fuzzy for [Command] {
-    fn find_fuzzy(&self, prompt: &str, options: u8) -> Vec<usize> {
+    async fn find_fuzzy(&self, prompt: &str, options: u8) -> Vec<usize> {
         let binding = prompt.to_ascii_lowercase();
         let terms = binding.split(char::is_whitespace).collect::<Vec<_>>();
         let mut v = Vec::with_capacity(options as usize);
-        self.iter().enumerate().for_each(|(idx, command)| {
+        for (idx, command) in self.iter().enumerate() {
             let display_name = command.display_name.to_lowercase();
             let terms_command = display_name.split(char::is_whitespace);
             let match_strength = terms_command.zip(terms.iter()).fold(
@@ -127,20 +132,19 @@ impl Fuzzy for [Command] {
             );
 
             if match_strength == 0 {
-                return;
+                continue;
             }
 
             // NOTE: this is potentially more runtime expensive than the above check so we run it later
             // i think
-            let handle = Handle::current();
-            let display = handle.block_on(command.display_condition.inner.as_ref()());
+            let display = command.display_condition.inner.as_ref()().await;
             if display.is_err() || display.is_ok_and(|display| !display) {
-                return;
+                continue;
             }
 
             if v.len() < options as usize {
                 v.push((match_strength, idx));
-                return;
+                continue;
             }
 
             for (stored_strength, stored_idx) in v.iter_mut() {
@@ -150,7 +154,7 @@ impl Fuzzy for [Command] {
                     break;
                 }
             }
-        });
+        }
 
         v.sort_by(|a, b| b.0.cmp(&a.0));
         v.into_iter().map(|(_, idx)| idx).collect()
@@ -160,7 +164,7 @@ impl Fuzzy for [Command] {
 pub struct CommandCallback {
     #[allow(clippy::complexity)]
     pub(super) inner: Box<
-        dyn Fn(Arc<Mutex<State>>) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+        dyn Fn(Arc<Mutex<State>>) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
             + Sync
             + Send,
     >,
@@ -169,13 +173,12 @@ pub struct CommandCallback {
 impl<F, Fut> From<F> for CommandCallback
 where
     F: Fn(Arc<Mutex<State>>) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<String, String>> + Send + 'static,
+    Fut: Future<Output = Result<(), String>> + Send + 'static,
 {
     fn from(inner: F) -> Self {
         Self {
             inner: Box::new(move |state| {
-                Box::pin(inner(state))
-                    as Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+                Box::pin(inner(state)) as Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
             }),
         }
     }

@@ -77,9 +77,9 @@ fn from_login_response_parses_firebase_sign_in_json() {
 
     let auth = Authorization::from_login_response(response.into()).unwrap();
 
-    assert_eq!(auth.get_display_name(), "\"Monkey\"");
+    assert_eq!(auth.get_display_name(), "Monkey");
     assert_eq!(auth.get_expires_in(), &Duration::from_secs(3600));
-    assert_eq!(auth.get_refresh_token(), "\"refresh-abc\"");
+    assert_eq!(auth.get_refresh_token(), "refresh-abc");
     assert!(auth.get_expire_instant() > Instant::now());
 }
 
@@ -92,7 +92,7 @@ fn from_login_response_rejects_invalid_json() {
 fn from_refresh_response_parses_token_json() {
     let response = r#"{
         "access_token": "access-abc",
-        "expiresIn": "3600",
+        "expires_in": "3600",
         "token_type": "Bearer",
         "refresh_token": "refresh-abc",
         "id_token": "id-abc",
@@ -102,12 +102,12 @@ fn from_refresh_response_parses_token_json() {
 
     let auth = Authorization::from_refresh_response("{}".into(), response.into()).unwrap();
 
-    assert_eq!(auth.get_access_token(), "\"access-abc\"");
+    assert_eq!(auth.get_access_token(), "access-abc");
     assert_eq!(auth.get_expires_in(), &Duration::from_secs(3600));
-    assert_eq!(auth.get_token_type(), "\"Bearer\"");
-    assert_eq!(auth.get_refresh_token(), "\"refresh-abc\"");
-    assert_eq!(auth.get_user_id(), "\"uid-1\"");
-    assert_eq!(auth.get_project_id(), "\"proj-1\"");
+    assert_eq!(auth.get_token_type(), "Bearer");
+    assert_eq!(auth.get_refresh_token(), "refresh-abc");
+    assert_eq!(auth.get_user_id(), "uid-1");
+    assert_eq!(auth.get_project_id(), "proj-1");
 }
 
 #[tokio::test]

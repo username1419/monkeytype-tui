@@ -80,11 +80,22 @@ use tokio::{
 
 use crate::{
     State,
-    notify::{QuickNotify, notify},
+    notify::{QuickNotify, enotify, error, notify},
 };
+
+pub(crate) const USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
 
 pub(crate) static AUTHORIZATION: Lazy<Arc<std::sync::Mutex<Authorization>>> =
     Lazy::new(|| Arc::new(std::sync::Mutex::new(Authorization::default())));
+
+pub(crate) static CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .inspect_err(|e| panic!("Client build failed: {e}"))
+        .unwrap()
+});
 
 static MONKEYTYPE_PAGE_CACHE: &str = "./monkeytype.html";
 static MONKEYTYPE_ROLLDOWN_CACHE: &str = "./monkeytype.js";
@@ -100,6 +111,7 @@ pub(crate) struct Authorization {
     access_token: String,
     #[serde(skip)]
     last_access_timestamp: Option<Instant>,
+    #[serde(skip)]
     expires_in: Duration,
     token_type: String,
     refresh_token: String,
@@ -159,7 +171,7 @@ impl Authorization {
         let api_key;
         {
             let Ok(a) = AUTHORIZATION.lock() else {
-                notify().enotify("Authentication state is poisoned");
+                enotify!("Authentication state is poisoned");
                 return Err("Authenication state is poisoned".into());
             };
             refresh_token = a.refresh_token.clone();
@@ -283,7 +295,7 @@ impl Authorization {
 
         if let Err(e) = write(MONKEYTYPE_REFRESH_TOKEN_PATH, o.to_string()) {
             spawn(async move {
-                notify().error(e);
+                error!(e);
             });
         }
     }
@@ -293,28 +305,40 @@ async fn get_refreshed_authorization(
     refresh_token: String,
     api_key: String,
 ) -> Result<Authorization, Box<dyn Error + Send + Sync + 'static>> {
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0")
-        .build()?;
+    let mut api_key = api_key;
+    if api_key.is_empty() {
+        api_key = get_api_key(&CLIENT).await?;
+    }
+    if refresh_token.is_empty() {
+        return Err("Refresh token is empty".into());
+    }
     let mut headers = HeaderMap::new();
     headers.append(
         "Content-Type",
         "application/x-www-form-urlencoded".parse().unwrap(),
     );
     headers.append("Referer", "https://monkeytype.com".parse().unwrap());
-    let request = format!("grant_type=refresh_token&refresh_token={}", refresh_token);
-    let authorization = client
+    let request_body = format!("grant_type=refresh_token&refresh_token={}", refresh_token);
+    let response = CLIENT
         .post(format!(
             "https://securetoken.googleapis.com/v1/token?key={}",
             api_key
         ))
         .headers(headers)
-        .body(request.clone())
+        .body(request_body.clone())
         .send()
-        .await?
-        .text()
         .await?;
-    let authorization = Authorization::from_refresh_response(request, authorization)?;
+
+    if !response.status().is_success() {
+        return Err(response
+            .status()
+            .canonical_reason()
+            .unwrap_or("Unspecified error")
+            .into());
+    }
+    let response_text = response.text().await?;
+    let mut authorization = Authorization::from_refresh_response(request_body, response_text)?;
+    authorization.api_key = api_key;
     Ok(authorization)
 }
 
@@ -427,13 +451,15 @@ pub(crate) async fn get_api_key(client: &Client) -> Result<String, Box<dyn Error
     Err("auth constants script does not contain apikey".into())
 }
 
-pub(crate) fn refresh_from_file() -> Result<Authorization, Box<dyn Error>> {
+pub(crate) async fn refresh_from_file() -> Result<Authorization, Box<dyn Error>> {
     let serialized_authorization = fs::read_to_string(MONKEYTYPE_REFRESH_TOKEN_PATH)?;
     let mut authorization: Authorization = serde_json::from_str(&serialized_authorization)?;
-    let e = match Handle::current().block_on(get_refreshed_authorization(
+    let e = match get_refreshed_authorization(
         authorization.refresh_token.clone(),
         authorization.api_key.clone(),
-    )) {
+    )
+    .await
+    {
         Err(e) => e,
         Ok(a) => {
             authorization.update(a);

@@ -15,7 +15,7 @@ fn sample_command() -> Command {
         || async { Ok(true) },
         vec!["words".into(), "time".into()],
         Some("words".into()),
-        |_: Arc<Mutex<State>>| async { Ok("done".into()) },
+        |_: Arc<Mutex<State>>| async { Ok(()) },
     )
 }
 
@@ -48,14 +48,14 @@ async fn command_call_invokes_handler() {
         || async { Ok(true) },
         vec![],
         None,
-        |_: Arc<Mutex<State>>| async { Ok("hello".into()) },
+        |_: Arc<Mutex<State>>| async { Ok(()) },
     );
 
     let state = Arc::new(Mutex::new(State::default()));
     let handle = command.call(state);
     let result = handle.await.unwrap();
 
-    assert_eq!(result, Ok("hello".into()));
+    assert_eq!(result, Ok(()));
 }
 
 #[test]

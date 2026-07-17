@@ -18,6 +18,10 @@ use tokio::{
     },
 };
 
+// NOTE: this notification system
+// is truly a clusterfuck
+// i should really refactor this
+
 #[derive(Debug)]
 struct MutableMpscReceiver(UnsafeCell<Receiver<Notification>>);
 unsafe impl Sync for MutableMpscReceiver {}
@@ -140,6 +144,12 @@ impl Notification {
     }
 }
 
+impl Display for Notification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}: {}", self.level, self.message))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum NotifLevel {
     Info,
@@ -161,14 +171,10 @@ impl Display for NotifLevel {
     }
 }
 
-const DEFAULT_QUICKNOTIFY_DURATION: Duration = Duration::from_secs(4);
+pub(crate) const DEFAULT_QUICKNOTIFY_DURATION: Duration = Duration::from_secs(4);
 
 pub(crate) trait QuickNotify {
-    fn debug<T: Debug>(&mut self, o: T) -> T;
-    fn info<T: Display>(&mut self, o: T) -> T;
-    fn error<T: Display>(&mut self, o: T) -> T;
-    fn enotify<T: Display>(&mut self, s: T);
-    fn todo(&mut self);
+    fn info<T: Display>(&mut self, o: T);
     fn success(&mut self, s: &str);
 }
 
@@ -179,69 +185,29 @@ pub(crate) fn notify() -> Notify {
 }
 
 pub(crate) fn send(notification: Notification) {
-    // NOTE: NOTIFICATION_RECEIVER initializes itself and NOTIFICATION_SENDER in the update thread,
-    // so this unwrap will never fail
-    let sender = NOTIFICATION_SENDER.get().unwrap().clone();
-    spawn(async move {
-        let _ = sender.send(notification).await;
-    });
+    #[cfg(not(test))]
+    {
+        // NOTE: NOTIFICATION_RECEIVER initializes itself and NOTIFICATION_SENDER in the update thread,
+        // so this unwrap will never fail
+        let sender = NOTIFICATION_SENDER.get().unwrap().clone();
+        spawn(async move {
+            let _ = sender.send(notification).await;
+        });
+    }
+
+    #[cfg(test)]
+    {
+        println!("{}", notification);
+    }
 }
 
 impl QuickNotify for Notify {
-    fn debug<T: Debug>(&mut self, o: T) -> T {
-        send(
-            Notification::builder()
-                .message(&format!("{o:?}"))
-                .duration(DEFAULT_QUICKNOTIFY_DURATION)
-                .notification_level(NotifLevel::Debug)
-                .build(),
-        );
-        o
-    }
-
-    fn info<T: Display>(&mut self, o: T) -> T {
+    fn info<T: Display>(&mut self, o: T) {
         send(
             Notification::builder()
                 .message(&format!("{o}"))
                 .duration(DEFAULT_QUICKNOTIFY_DURATION)
                 .notification_level(NotifLevel::Info)
-                .build(),
-        );
-        o
-    }
-
-    fn error<T: Display>(&mut self, o: T) -> T {
-        send(
-            Notification::builder()
-                .message(&format!("{o}"))
-                .duration(DEFAULT_QUICKNOTIFY_DURATION)
-                .notification_level(NotifLevel::Error)
-                .build(),
-        );
-        o
-    }
-
-    fn enotify<T: Display>(&mut self, s: T) {
-        send(
-            Notification::builder()
-                .message(&format!("{}", s))
-                .duration(DEFAULT_QUICKNOTIFY_DURATION)
-                .notification_level(NotifLevel::Error)
-                .build(),
-        );
-    }
-
-    fn todo(&mut self) {
-        send(
-            Notification::builder()
-                .message(&format!(
-                    "[{}:{} {}]: not yet implemented",
-                    line!(),
-                    column!(),
-                    file!()
-                ))
-                .duration(DEFAULT_QUICKNOTIFY_DURATION)
-                .notification_level(NotifLevel::Error)
                 .build(),
         );
     }
@@ -303,3 +269,99 @@ impl<'a> NotificationBuilder<'a> {
         )
     }
 }
+
+macro_rules! debug {
+    ($i:expr) => {
+        match $i {
+            tmp => {
+                use crate::notify::*;
+                send(
+                    Notification::builder()
+                        .message(&format!(
+                            "[{}:{}:{}] {} = {:#?}",
+                            std::file!(),
+                            std::line!(),
+                            std::column!(),
+                            std::stringify!($i),
+                            &tmp
+                        ))
+                        .duration(DEFAULT_QUICKNOTIFY_DURATION)
+                        .notification_level(NotifLevel::Debug)
+                        .build(),
+                );
+                tmp
+            }
+        }
+    };
+}
+pub(crate) use debug;
+
+macro_rules! error {
+    ($i:expr) => {
+        match $i {
+            tmp => {
+                use crate::notify::*;
+                send(
+                    Notification::builder()
+                        .message(&format!(
+                            "[{}:{}:{}] {} = {:#?}",
+                            std::file!(),
+                            std::line!(),
+                            std::column!(),
+                            std::stringify!($i),
+                            &tmp
+                        ))
+                        .duration(DEFAULT_QUICKNOTIFY_DURATION)
+                        .notification_level(NotifLevel::Error)
+                        .build(),
+                );
+                tmp
+            }
+        }
+    };
+}
+pub(crate) use error;
+
+macro_rules! enotify {
+    ($i:expr) => {
+        match $i {
+            tmp => {
+                use crate::notify::*;
+                send(
+                    Notification::builder()
+                        .message(&format!(
+                            "[{}:{}:{}] {} = {:#?}",
+                            std::file!(),
+                            std::line!(),
+                            std::column!(),
+                            std::stringify!($i),
+                            &tmp
+                        ))
+                        .duration(DEFAULT_QUICKNOTIFY_DURATION)
+                        .notification_level(NotifLevel::Error)
+                        .build(),
+                );
+            }
+        }
+    };
+}
+pub(crate) use enotify;
+
+macro_rules! todo {
+    () => {
+        use crate::notify::*;
+        send(
+            Notification::builder()
+                .message(&format!(
+                    "[{}:{}:{}] not yet implemented",
+                    std::file!(),
+                    std::line!(),
+                    std::column!(),
+                ))
+                .duration(DEFAULT_QUICKNOTIFY_DURATION)
+                .notification_level(NotifLevel::Error)
+                .build(),
+        );
+    };
+}
+pub(crate) use todo;
