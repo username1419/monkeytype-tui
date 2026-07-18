@@ -51,18 +51,22 @@
 
 use std::{
     collections::VecDeque,
-    fs::{self, create_dir},
-    sync::{Arc, Mutex, atomic::AtomicU32},
-    time::Duration,
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicU32},
 };
 
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::{spawn, sync::Semaphore, time::sleep};
+use tokio::{
+    fs::{self, create_dir, read_to_string, write},
+    sync::Semaphore,
+};
 use tokio_util::task::TaskTracker;
 
 use crate::{
-    CACHE_DIR,
+    CACHE_DIR, DATA_DIR,
+    auth::CLIENT,
     notify::{debug, enotify},
 };
 
@@ -111,6 +115,28 @@ pub(crate) struct GithubTagsResponseCommit {
     pub(crate) url: String,
 }
 
+static VERSIONING_FILE: Lazy<PathBuf> = Lazy::new(|| DATA_DIR.join("webclient_version"));
+
+pub(crate) async fn has_version_changed() -> Result<bool, Box<dyn std::error::Error + Send + Sync>>
+{
+    if fs::read_dir(DATA_DIR.as_path())
+        .await?
+        .next_entry()
+        .await?
+        .is_none()
+    {
+        return Ok(true);
+    }
+    let saved_version = read_to_string(&*VERSIONING_FILE).await?;
+    let tags = get_tags(&CLIENT).await?;
+    let latest_version = tags.first().unwrap();
+
+    // NOTE: since this heavily depends on the fact that the monkeytype team does not create beta release
+    // tags on master branch
+    // uhhhh prayge
+    Ok(saved_version.ne(latest_version))
+}
+
 /// GET https://api.github.com/repos/monkeytypegame/monkeytype/tags
 /// and returns the output
 ///
@@ -131,8 +157,6 @@ const IGNORE_DIR: &[&str] = &["images"];
 /// downloads the files in https://api.github.com/repos/monkeytypegame/monkeytype/contents/frontend/static?ref=[version]
 /// recursively, traversing using bfs
 ///
-/// this function is blocking; call it on a worker thread. dont use .await on a non-blocking thread
-///
 /// we do this because the alternative is to have git as a project dependency which would be one of
 /// the choices of all time
 ///
@@ -146,9 +170,12 @@ pub(crate) async fn download_resources_recursive(
     // NOTE: i just ball it and hope its the correct number of items
     let root = client.get(format!("https://api.github.com/repos/monkeytypegame/monkeytype/contents/frontend/static?ref={}", version)).send().await?.json::<VecDeque<GithubContentItem>>().await?;
     let skipped = Arc::new(AtomicU32::default());
-    let semaphore = Arc::new(Semaphore::new(128));
+    // NOTE: github allows max 100 concurrent requests
+    let semaphore = Arc::new(Semaphore::new(100));
 
     let tracker = TaskTracker::new();
+
+    let _ = fs::remove_file(VERSIONING_FILE.as_path()).await;
 
     for item in root {
         download_item(
@@ -162,6 +189,12 @@ pub(crate) async fn download_resources_recursive(
 
     tracker.close();
     tracker.wait().await;
+    // NOTE: we write to this file at the end since it will also indicate if our previous tries
+    // have been successful or not
+    match write(&*VERSIONING_FILE, version).await {
+        Ok(_) => {}
+        Err(e) => enotify!(format!("Error while writing version file: {}", e)),
+    }
 
     Ok(skipped.load(std::sync::atomic::Ordering::Acquire))
 }
@@ -178,12 +211,12 @@ fn download_item(
         match item._type {
             GithubContentItemType::File => {
                 let path = CACHE_DIR.join(item.path.strip_prefix("frontend/static/").unwrap());
-                let Ok(_permit) = semaphore.acquire().await else {
+                let Some(url) = item.download_url else {
                     skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return;
                 };
 
-                let Some(url) = item.download_url else {
+                let Ok(_permit) = semaphore.acquire().await else {
                     skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return;
                 };
@@ -193,14 +226,19 @@ fn download_item(
                     return;
                 };
 
+                drop(_permit);
+
+                let Ok(response) = response.error_for_status() else {
+                    skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                };
+
                 let Ok(contents) = response.bytes().await else {
                     skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return;
                 };
 
-                drop(_permit);
-
-                if let Err(e) = fs::write(&path, contents) {
+                if let Err(e) = fs::write(&path, contents).await {
                     enotify!(e);
                     enotify!(path);
                 }
@@ -212,7 +250,7 @@ fn download_item(
                     return;
                 }
 
-                let Ok(_) = create_dir(&path) else {
+                let Ok(_) = create_dir(&path).await else {
                     skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return;
                 };
@@ -227,12 +265,17 @@ fn download_item(
                     return;
                 };
 
-                let Ok(dir_contents) = response.json::<Vec<GithubContentItem>>().await else {
+                drop(_permit);
+
+                let Ok(response) = response.error_for_status() else {
                     skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return;
                 };
 
-                drop(_permit);
+                let Ok(dir_contents) = response.json::<Vec<GithubContentItem>>().await else {
+                    skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                };
 
                 for item in dir_contents {
                     download_item(

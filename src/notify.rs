@@ -89,8 +89,15 @@ fn render_notifications(notifications: &[Notification], frame: &mut ratatui::Fra
             NotifLevel::Info => Color::Cyan,
         };
 
-        let height =
-            f64::ceil(notification.message.len() as f64 / NOTIFICATION_WIDTH as f64) as u16 + 2;
+        let height = f64::ceil(notification.message.len() as f64 / NOTIFICATION_WIDTH as f64)
+            as u16
+            + 2
+            + notification
+                .message
+                .chars()
+                .filter(char::is_ascii_control)
+                .count() as u16;
+
         let popup_area = Rect {
             x: area.width.saturating_sub(NOTIFICATION_WIDTH),
             y: running_length,
@@ -187,12 +194,24 @@ pub(crate) fn notify() -> Notify {
 pub(crate) fn send(notification: Notification) {
     #[cfg(not(test))]
     {
-        // NOTE: NOTIFICATION_RECEIVER initializes itself and NOTIFICATION_SENDER in the update thread,
-        // so this unwrap will never fail
-        let sender = NOTIFICATION_SENDER.get().unwrap().clone();
-        spawn(async move {
-            let _ = sender.send(notification).await;
-        });
+        match NOTIFICATION_SENDER.get() {
+            Some(sender) => {
+                let sender = sender.clone();
+                spawn(async move {
+                    let _ = sender.send(notification).await;
+                });
+            }
+            None => {
+                // NOTE: the only time this happens is right before the update thread is executed
+                // for the first time
+
+                if cfg!(debug_assertions) {
+                    // if the render thread is fucked up somehow
+                    println!("{}", notification);
+                }
+                NOTIFICATIONS.lock().unwrap().push(notification);
+            }
+        }
     }
 
     #[cfg(test)]

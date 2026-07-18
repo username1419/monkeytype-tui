@@ -14,7 +14,7 @@ use std::{
     env,
     error::Error,
     fs::{create_dir_all, read_to_string, remove_dir_all, write},
-    io::{Read, stdin},
+    io::{self, Read, Write, stdin},
     path::PathBuf,
     str::FromStr,
     sync::{Arc, atomic::AtomicBool},
@@ -29,16 +29,20 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 use tokio::{
-    join, spawn,
+    join,
+    runtime::{Handle, Runtime},
+    spawn,
     sync::Mutex,
+    task::{JoinHandle, spawn_blocking},
     time::{Instant, sleep},
 };
 use tokio_stream::StreamExt;
-use tokio_util::task::TaskTracker;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
-    auth::{AUTHORIZATION, Authorization, refresh_from_file},
-    notify::{NotificationManager, debug, enotify, notify},
+    auth::{AUTHORIZATION, Authorization, CLIENT, refresh_from_file},
+    github::{download_resources_recursive, get_tags, has_version_changed},
+    notify::{NotificationManager, debug, enotify, error, notify},
     test::TEST,
     traits::UpdateableWidget,
 };
@@ -59,8 +63,9 @@ enum Action {
 struct State {
     action: Action,
     commandline: CommandLine,
-    shutdown: bool,
+    shutdown: CancellationToken,
     terminal_size: Size,
+    is_online: bool,
 }
 
 /// NOTE: 60fps
@@ -100,6 +105,47 @@ pub(crate) static CACHE_DIR: Lazy<PathBuf> = Lazy::new(|| {
 async fn main() -> std::io::Result<()> {
     let mut state = State::default();
     let mut authorization = Authorization::default();
+
+    spawn(async {
+        match has_version_changed().await {
+            Ok(b) => {
+                if !b {
+                    return;
+                }
+            }
+            Err(e) => {
+                enotify!(format!(
+                    "Error encountered while attempting to check game asset version: {}",
+                    e
+                ));
+                enotify!("Continuing with refresh...");
+            }
+        }
+
+        notify().info("Current game assets version does not match. Updating...");
+
+        let version = match get_tags(&CLIENT).await {
+            Ok(mut tags) => tags.swap_remove(0),
+            Err(e) => {
+                enotify!(format!(
+                    "Error encountered while attempting to refresh game assets: {}",
+                    e
+                ));
+                return;
+            }
+        };
+        match download_resources_recursive(&CLIENT, version).await {
+            Ok(skipped) => notify().success(&format!(
+                "Game assets updated. {} files skipped due to errors.",
+                skipped
+            )),
+            Err(e) => {
+                error!(e);
+            }
+        };
+    });
+
+    // NOTE: ideally we wait for this process to complete
 
     if let Ok(a) = refresh_from_file().await {
         authorization = a;
@@ -156,6 +202,7 @@ async fn main() -> std::io::Result<()> {
     }
 
     *AUTHORIZATION.lock().unwrap() = authorization;
+    let cancellation_token = state.shutdown.clone();
     let state = Arc::new(Mutex::new(state));
     let tracker = TaskTracker::new();
 
@@ -163,13 +210,14 @@ async fn main() -> std::io::Result<()> {
     let _t = tracker.clone();
     let __s = state.clone();
     let __t = tracker.clone();
+    let ___t = tracker.clone();
 
-    // NOTE: me when i commit a warcrime:
-    tokio::select! {
-        _ = key_update(state, _t) => {},
-        _ = display(_s) => {},
-        _ = update(__s, __t) => {}
-    }
+    let key_update_handle = key_update(state, _t);
+    let _display_handle = display(_s, ___t);
+    let _update_handle = update(__s, __t);
+
+    cancellation_token.cancelled().await;
+    key_update_handle.abort();
 
     tracker.close();
     tracker.wait().await;
@@ -177,6 +225,7 @@ async fn main() -> std::io::Result<()> {
 
     if cfg!(debug_assertions) {
         print!("(Dev) Remove app specific directories? [Y/n]: ");
+        let _ = io::stdout().flush();
         let mut buf = [0_u8; 1];
         if stdin().lock().read_exact(&mut buf).is_ok() {
             match buf[0] {
@@ -198,128 +247,148 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-async fn display(state: Arc<Mutex<State>>) -> Result<(), Box<dyn Error>> {
-    let mut terminal = ratatui::init();
+fn display(
+    state: Arc<Mutex<State>>,
+    tracker: TaskTracker,
+) -> JoinHandle<Result<(), Box<dyn Error + Send + Sync>>> {
+    tracker.spawn(async move {
+        let mut terminal = ratatui::init();
 
-    loop {
-        let now = Instant::now();
-        let mut state = state.lock().await;
-        terminal.draw(|frame| {
-            let area = frame.area();
-            state.terminal_size = area.as_size();
-            let width = area.width;
-            let height = area.height;
+        loop {
+            let now = Instant::now();
+            let mut state = state.lock().await;
+            terminal.draw(|frame| {
+                let area = frame.area();
+                state.terminal_size = area.as_size();
+                let width = area.width;
+                let height = area.height;
 
-            frame.render_widget(
-                Block::bordered().title_top("sup").blue(),
-                Rect::new(0, 0, 250, 250),
-            );
-
-            if state.shutdown {
-                let mut rect = frame.area();
-                rect = rect.resize(Size::new(40, 4));
-                rect.x = frame.area().width / 2 - rect.width / 2;
-                rect.y = frame.area().height / 2 - rect.height / 2;
                 frame.render_widget(
-                    Paragraph::new("Waiting for background tasks to finish...")
-                        .wrap(Wrap { trim: true })
-                        .block(
-                            Block::bordered()
-                                .title("Exit")
-                                .title_alignment(Alignment::Center),
-                        )
-                        .centered(),
-                    rect,
+                    Block::bordered().title_top("sup").blue(),
+                    Rect::new(0, 0, 250, 250),
                 );
+
+                if state.shutdown.is_cancelled() {
+                    let mut rect = frame.area();
+                    rect = rect.resize(Size::new(40, 4));
+                    rect.x = frame.area().width / 2 - rect.width / 2;
+                    rect.y = frame.area().height / 2 - rect.height / 2;
+                    frame.render_widget(
+                        Paragraph::new("Waiting for background tasks to finish...")
+                            .wrap(Wrap { trim: true })
+                            .block(
+                                Block::bordered()
+                                    .title("Exit")
+                                    .title_alignment(Alignment::Center),
+                            )
+                            .centered(),
+                        rect,
+                    );
+                }
+
+                state.commandline.render(frame, width, height);
+                if let Ok(t) = TEST.try_lock() {
+                    t.render(frame, width, height);
+                }
+                NotificationManager::try_render(frame, width, height);
+            })?;
+
+            if state.shutdown.is_cancelled() {
+                break;
             }
 
-            state.commandline.render(frame, width, height);
-            if let Ok(t) = TEST.try_lock() {
-                t.render(frame, width, height);
+            drop(state);
+
+            let delta = Instant::now() - now;
+            if delta < DISPLAY_RATE {
+                sleep(DISPLAY_RATE - delta).await;
             }
-            NotificationManager::try_render(frame, width, height);
-        })?;
-
-        if state.shutdown {
-            break;
         }
 
-        drop(state);
-
-        let delta = Instant::now() - now;
-        if delta < DISPLAY_RATE {
-            sleep(DISPLAY_RATE - delta).await;
-        }
-    }
-
-    Ok(())
+        Ok(())
+    })
 }
 
-async fn key_update(state: Arc<Mutex<State>>, tracker: TaskTracker) -> Result<(), Box<dyn Error>> {
-    let mut reader = EventStream::new();
-    loop {
-        let now = Instant::now();
-        let Some(Ok(event)) = reader.next().await else {
+fn key_update(
+    state: Arc<Mutex<State>>,
+    tracker: TaskTracker,
+) -> JoinHandle<Result<(), Box<dyn Error + Send + Sync>>> {
+    let _t = tracker.clone();
+    _t.spawn(async move {
+        let mut reader = EventStream::new();
+        loop {
+            let now = Instant::now();
+            let Some(Ok(event)) = reader.next().await else {
+                let delta = Instant::now() - now;
+                if delta < KEY_UPDATE_RATE {
+                    sleep(KEY_UPDATE_RATE - delta).await;
+                }
+                continue;
+            };
+
+            match event {
+                event::Event::FocusGained => {}
+                event::Event::FocusLost => {}
+                event::Event::Key(key_event) => {
+                    let state = state.clone();
+                    tracker.spawn(async move {
+                        game::event_keypressed(key_event, state).await.ok();
+                    });
+                }
+                event::Event::Mouse(_mouse_event) => {}
+                event::Event::Paste(_) => todo!(),
+                event::Event::Resize(_, _) => todo!(),
+            }
+
             let delta = Instant::now() - now;
             if delta < KEY_UPDATE_RATE {
                 sleep(KEY_UPDATE_RATE - delta).await;
             }
-            continue;
-        };
-
-        match event {
-            event::Event::FocusGained => {}
-            event::Event::FocusLost => {}
-            event::Event::Key(key_event) => {
-                let state = state.clone();
-                tracker.spawn(async move {
-                    game::event_keypressed(key_event, state).await.ok();
-                });
-            }
-            event::Event::Mouse(_mouse_event) => {}
-            event::Event::Paste(_) => todo!(),
-            event::Event::Resize(_, _) => todo!(),
         }
-
-        let delta = Instant::now() - now;
-        if delta < KEY_UPDATE_RATE {
-            sleep(KEY_UPDATE_RATE - delta).await;
-        }
-    }
+    })
 }
 
-async fn update(state: Arc<Mutex<State>>, _tracker: TaskTracker) -> Result<(), Box<dyn Error>> {
-    let is_refreshing = Arc::new(AtomicBool::new(false));
-    loop {
-        let now = Instant::now();
+fn update(
+    state: Arc<Mutex<State>>,
+    _tracker: TaskTracker,
+) -> JoinHandle<Result<(), Box<dyn Error + Send + Sync>>> {
+    let _t = _tracker.clone();
+    _t.spawn(async move {
+        let is_refreshing = Arc::new(AtomicBool::new(false));
+        loop {
+            let now = Instant::now();
 
-        {
-            let mut _state = state.lock().await;
-
-            let (_, _) = join!(NotificationManager::update(), _state.commandline.update(),);
-
-            // TODO: debounce time for token refresh
-            if let Ok(authorization) = AUTHORIZATION.lock()
-                && authorization.get_expire_instant() - now < Duration::from_mins(5)
-                && !authorization.get_refresh_token().is_empty()
-                && !is_refreshing.load(std::sync::atomic::Ordering::Relaxed)
             {
-                is_refreshing.store(true, std::sync::atomic::Ordering::Relaxed);
-                let i = is_refreshing.clone();
-                spawn(async move {
-                    let _ = Authorization::refresh_non_blocking()
-                        .await
-                        .inspect_err(|e| {
-                            enotify!(format!("Error while refreshing access token: {}", e))
-                        });
-                    i.store(false, std::sync::atomic::Ordering::Relaxed);
-                });
+                let mut _state = state.lock().await;
+                if _state.shutdown.is_cancelled() {
+                    break Ok(());
+                }
+
+                let (_, _) = join!(NotificationManager::update(), _state.commandline.update(),);
+
+                // TODO: debounce time for token refresh
+                if let Ok(authorization) = AUTHORIZATION.lock()
+                    && authorization.get_expire_instant() < now
+                    && !authorization.get_refresh_token().is_empty()
+                    && !is_refreshing.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    is_refreshing.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let i = is_refreshing.clone();
+                    spawn(async move {
+                        let _ = Authorization::refresh_non_blocking()
+                            .await
+                            .inspect_err(|e| {
+                                enotify!(format!("Error while refreshing access token: {}", e))
+                            });
+                        i.store(false, std::sync::atomic::Ordering::Relaxed);
+                    });
+                }
+            }
+
+            let delta = Instant::now() - now;
+            if delta < UPDATE_RATE {
+                sleep(UPDATE_RATE - delta).await;
             }
         }
-
-        let delta = Instant::now() - now;
-        if delta < UPDATE_RATE {
-            sleep(UPDATE_RATE - delta).await;
-        }
-    }
+    })
 }

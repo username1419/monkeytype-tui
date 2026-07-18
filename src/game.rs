@@ -11,7 +11,7 @@ pub(crate) async fn event_keypressed(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     match (key.modifiers, key.code) {
         (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
-            state.lock().await.shutdown = true;
+            state.lock().await.shutdown.cancel();
         }
         (KeyModifiers::CONTROL, KeyCode::F(10)) => {
             enotify!("testing");

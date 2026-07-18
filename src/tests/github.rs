@@ -95,6 +95,8 @@ fn github_dir_object_deserialize() {
 #[test]
 #[ignore = "inet"]
 fn download_test() {
+    #[cfg(feature = "profiling")]
+    console_subscriber::init();
     let rt = Runtime::new().unwrap();
 
     let client = Client::builder().user_agent(USER_AGENT).build().unwrap();
