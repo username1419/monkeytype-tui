@@ -157,12 +157,12 @@ impl Fuzzy for [Command] {
                 continue;
             }
 
-            for (stored_strength, stored_idx) in v.iter_mut() {
-                if match_strength >= *stored_strength {
-                    *stored_strength = match_strength;
-                    *stored_idx = idx;
-                    break;
-                }
+            if let Some((stored_strength, stored_idx)) = v.iter_mut().min()
+                && match_strength >= *stored_strength
+            {
+                *stored_strength = match_strength;
+                *stored_idx = idx;
+                break;
             }
         }
 
