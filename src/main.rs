@@ -331,11 +331,7 @@ fn key_update(
         loop {
             let now = Instant::now();
             let Some(Ok(event)) = reader.next().await else {
-                let delta = Instant::now() - now;
-                if delta < KEY_UPDATE_RATE {
-                    sleep(KEY_UPDATE_RATE - delta).await;
-                }
-                continue;
+                break Ok(());
             };
 
             match event {
