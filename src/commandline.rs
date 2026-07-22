@@ -299,7 +299,7 @@ impl UpdateableWidget for CommandLine {
 
         let c = ROOT_COMMANDS.clone();
         let len = self.matched_commands.len();
-        for idx in self.matched_commands.iter() {
+        for (m_idx, idx) in self.matched_commands.iter().enumerate() {
             let command = match self.root_command.is_none() {
                 false => self.commands.get(*idx).unwrap(),
                 true => c.get(*idx).unwrap(),
@@ -309,7 +309,7 @@ impl UpdateableWidget for CommandLine {
                 .white()
                 .wrap(Wrap { trim: true });
             if let Some(sel_cmd) = self.selected_command
-                && sel_cmd.eq(idx)
+                && sel_cmd == m_idx
             {
                 widget = widget.on_blue().black();
             }
