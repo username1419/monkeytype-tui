@@ -9,6 +9,7 @@ pub mod settings;
 pub(crate) mod test;
 pub(crate) mod tests;
 pub mod traits;
+pub(crate) mod typing_test;
 
 use std::{
     env,

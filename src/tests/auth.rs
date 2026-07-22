@@ -9,6 +9,7 @@ use tokio::time::Instant;
 
 use crate::auth::Authorization;
 
+#[cfg(test)]
 fn sample_auth() -> Authorization {
     Authorization::new(
         "api-key".into(),

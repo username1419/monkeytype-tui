@@ -133,7 +133,7 @@ pub(crate) async fn has_version_changed() -> Result<bool, Box<dyn std::error::Er
 
     // NOTE: since this heavily depends on the fact that the monkeytype team does not create beta release
     // tags on master branch
-    // uhhhh prayge
+    // so uhhhh prayge
     Ok(saved_version.ne(latest_version))
 }
 
@@ -167,7 +167,6 @@ pub(crate) async fn download_resources_recursive(
     client: &Client,
     version: String,
 ) -> Result<u32, reqwest::Error> {
-    // NOTE: i just ball it and hope its the correct number of items
     let root = client.get(format!("https://api.github.com/repos/monkeytypegame/monkeytype/contents/frontend/static?ref={}", version)).send().await?.json::<VecDeque<GithubContentItem>>().await?;
     let skipped = Arc::new(AtomicU32::default());
     // NOTE: github allows max 100 concurrent requests

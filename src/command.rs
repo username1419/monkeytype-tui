@@ -1,12 +1,7 @@
 use once_cell::sync::Lazy;
-use tokio::{
-    runtime::Handle,
-    spawn,
-    sync::{Mutex, oneshot},
-    task::JoinHandle,
-};
+use tokio::{spawn, sync::Mutex, task::JoinHandle};
 
-use crate::{State, callbacks::initialize_all, notify::enotify};
+use crate::{State, callbacks::initialize_all};
 use std::{fmt::Debug, pin::Pin, sync::Arc};
 
 pub(crate) static ROOT_COMMANDS: Lazy<Arc<[Command]>> = Lazy::new(|| initialize_all().into());

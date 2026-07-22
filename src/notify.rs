@@ -384,3 +384,21 @@ macro_rules! todo {
     };
 }
 pub(crate) use todo;
+
+macro_rules! wnotify {
+    ($i:expr) => {
+        match $i {
+            tmp => {
+                use crate::notify::*;
+                send(
+                    Notification::builder()
+                        .message(&tmp)
+                        .duration(DEFAULT_QUICKNOTIFY_DURATION)
+                        .notification_level(NotifLevel::Warning)
+                        .build(),
+                );
+            }
+        }
+    };
+}
+pub(crate) use wnotify;
