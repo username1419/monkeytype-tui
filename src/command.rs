@@ -4,8 +4,10 @@ use tokio::{spawn, sync::Mutex, task::JoinHandle};
 use crate::{State, callbacks::initialize_all};
 use std::{fmt::Debug, pin::Pin, sync::Arc};
 
+/// All registered commands, lazily initialized from [`callbacks::initialize_all`].
 pub(crate) static ROOT_COMMANDS: Lazy<Arc<[Command]>> = Lazy::new(|| initialize_all().into());
 
+/// A user-facing command with a display name, options, visibility condition, and async handler.
 #[derive(Debug)]
 pub(crate) struct Command {
     /// Internal name for the command
@@ -24,6 +26,7 @@ pub(crate) struct Command {
     handler: CommandCallback,
 }
 
+/// Logical category for a [`Command`], used to filter commands in the UI.
 #[derive(Default, Debug, Clone)]
 pub(crate) enum CommandGroup {
     Test,
@@ -40,6 +43,8 @@ pub(crate) enum CommandGroup {
 }
 
 impl Command {
+    /// Creates a new command with the given metadata, visibility condition, and async handler.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: String,
         display_name: String,
@@ -60,30 +65,37 @@ impl Command {
         }
     }
 
+    /// Returns the internal command identifier.
     pub fn get_id(&self) -> &String {
         &self.id
     }
 
+    /// Returns the command name shown to the user.
     pub fn get_display_name(&self) -> &String {
         &self.display_name
     }
 
+    /// Returns the command's category group.
     pub fn get_group(&self) -> &CommandGroup {
         &self.group
     }
 
+    /// Returns the available sub-options for this command.
     pub fn get_options(&self) -> &Vec<String> {
         &self.options
     }
 
+    /// Returns the currently selected sub-option, if any.
     pub fn get_selected_option(&self) -> Option<&String> {
         self.selected_option.as_ref()
     }
 
+    /// Spawns the command's async handler with the given application state.
     pub fn call(&self, state: Arc<Mutex<State>>) -> JoinHandle<Result<(), String>> {
         spawn(self.handler.inner.as_ref()(state))
     }
 
+    /// Creates a lightweight clone of this command without the handler closure.
     pub(crate) fn clone(&self) -> ClonedCommand {
         ClonedCommand {
             id: self.id.clone(),
@@ -95,6 +107,7 @@ impl Command {
     }
 }
 
+/// A cloneable snapshot of a [`Command`] that omits the handler closure.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ClonedCommand {
     id: String,
@@ -104,7 +117,9 @@ pub(crate) struct ClonedCommand {
     selected_option: Option<String>,
 }
 
+/// Fuzzy-match a list of commands against a user prompt.
 pub(crate) trait Fuzzy {
+    /// Returns the indices of the top `options` matching commands, sorted by match strength.
     async fn find_fuzzy(&self, prompt: &str, options: u8) -> Vec<usize>;
 }
 
@@ -156,6 +171,7 @@ impl Fuzzy for [Command] {
     }
 }
 
+/// Type-erased async callback invoked when a [`Command`] is executed.
 pub struct CommandCallback {
     #[allow(clippy::complexity)]
     pub(super) inner: Box<
@@ -185,6 +201,7 @@ impl Debug for CommandCallback {
     }
 }
 
+/// Type-erased async predicate that determines whether a [`Command`] should be shown.
 pub struct Condition {
     #[allow(clippy::complexity)]
     pub(super) inner:

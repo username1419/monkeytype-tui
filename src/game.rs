@@ -5,6 +5,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{State, notify::enotify, test::TEST};
 
+/// Handles a single key event, routing it to the command line or typing test
+/// depending on whether the command line is enabled.
+///
+/// Keybindings:
+/// - `Ctrl+Q` — initiate shutdown
+/// - `Esc` — toggle command line
+/// - `Enter` — submit command line input
+/// - Printable characters — forwarded to the active input target
 pub(crate) async fn event_keypressed(
     key: KeyEvent,
     state: Arc<Mutex<State>>,

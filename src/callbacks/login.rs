@@ -9,6 +9,7 @@ use crate::{
     notify::{QuickNotify, error, notify},
 };
 
+/// Creates the "Login with email and password" command.
 pub(crate) fn create() -> Command {
     Command::new(
         "login".into(),
@@ -55,6 +56,7 @@ pub(crate) fn create() -> Command {
     )
 }
 
+/// Opens the command line in prompt mode to collect the user's password.
 async fn prompt_user_password(state: &Arc<Mutex<State>>) -> Result<String, String> {
     let (send, recv) = oneshot::channel::<(String, Option<ClonedCommand>)>();
     state
@@ -74,6 +76,7 @@ async fn prompt_user_password(state: &Arc<Mutex<State>>) -> Result<String, Strin
     Ok(password)
 }
 
+/// Opens the command line in prompt mode to collect the user's email address.
 async fn prompt_user_email(state: &Arc<Mutex<State>>) -> Result<String, String> {
     let (send, recv) = oneshot::channel::<(String, Option<ClonedCommand>)>();
     state

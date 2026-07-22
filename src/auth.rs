@@ -83,12 +83,15 @@ use crate::{
     notify::{QuickNotify, enotify, error, notify},
 };
 
+/// Browser user-agent string sent with all HTTP requests to monkeytype.com.
 pub(crate) const USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
 
+/// Global authorization state, lazily initialized and shared across threads.
 pub(crate) static AUTHORIZATION: Lazy<Arc<std::sync::Mutex<Authorization>>> =
     Lazy::new(|| Arc::new(std::sync::Mutex::new(Authorization::default())));
 
+/// Shared HTTP client with a browser-like user-agent.
 pub(crate) static CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
         .user_agent(USER_AGENT)
@@ -97,10 +100,15 @@ pub(crate) static CLIENT: Lazy<Client> = Lazy::new(|| {
         .unwrap()
 });
 
+/// Path to the cached monkeytype.com homepage HTML.
 static MONKEYTYPE_PAGE_CACHE: &str = "./monkeytype.html";
+/// Path to the cached rolldown application bundle.
 static MONKEYTYPE_ROLLDOWN_CACHE: &str = "./monkeytype.js";
+/// Path to the cached Firebase config script.
 static MONKEYTYPE_AUTH_CONSTANTS_CACHE: &str = "./auth-constants.js";
+/// Path to the cached Firebase API key.
 static MONKEYTYPE_APIKEY_CACHE: &str = "./apikey";
+/// Path to the persisted refresh token and session metadata.
 static MONKEYTYPE_REFRESH_TOKEN_PATH: &str = "./refresh_token";
 
 /// Tokens and metadata returned by Firebase sign-in (or, when implemented, token refresh).
@@ -120,6 +128,7 @@ pub(crate) struct Authorization {
 }
 
 impl Authorization {
+    /// Creates a new `Authorization` with all fields specified.
     #[cfg(debug_assertions)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -184,46 +193,58 @@ impl Authorization {
         Ok(())
     }
 
+    /// Returns the user's display name.
     pub(crate) fn get_display_name(&self) -> &String {
         &self.display_name
     }
 
+    /// Returns the short-lived access (bearer) token.
     pub(crate) fn get_access_token(&self) -> &String {
         &self.access_token
     }
 
+    /// Returns the token lifetime duration.
     pub(crate) fn get_expires_in(&self) -> &Duration {
         &self.expires_in
     }
 
+    /// Returns the token type (e.g. `"Bearer"`).
     pub(crate) fn get_token_type(&self) -> &String {
         &self.token_type
     }
 
+    /// Returns the long-lived refresh token used to obtain new access tokens.
     pub(crate) fn get_refresh_token(&self) -> &String {
         &self.refresh_token
     }
 
+    /// Returns the Firebase user ID.
     pub(crate) fn get_user_id(&self) -> &String {
         &self.user_id
     }
 
+    /// Returns the Firebase project ID.
     pub(crate) fn get_project_id(&self) -> &String {
         &self.project_id
     }
 
+    /// Returns the [`Instant`] at which the current access token expires.
     pub(crate) fn get_expire_instant(&self) -> Instant {
         self.last_access_timestamp.unwrap_or(Instant::now()) + self.expires_in
     }
 
+    /// Returns `true` if the access token has expired.
     pub(crate) fn is_access_expired(&self) -> bool {
         self.get_expire_instant() - Instant::now() == Duration::ZERO
     }
 
+    /// Returns `true` if a refresh token is present (i.e. the user has logged in).
     pub(crate) fn is_logged_in(&self) -> bool {
         !self.refresh_token.is_empty()
     }
 
+    /// Merges non-default fields from `auth` into `self`, preserving existing
+    /// values where the incoming field is empty or zero.
     pub(crate) fn update(&mut self, auth: Authorization) {
         if auth.display_name != String::default() {
             self.display_name = auth.display_name;
@@ -254,6 +275,7 @@ impl Authorization {
         }
     }
 
+    /// Parses the JSON request and response from the Google token refresh endpoint.
     pub(crate) fn from_refresh_response(
         request: String,
         response: String,
@@ -280,6 +302,8 @@ impl Authorization {
         })
     }
 
+    /// Persists the refresh token and session metadata to disk so the session
+    /// can be restored on the next launch.
     pub(crate) fn save_to_disk(&self) {
         let o = json!({
             "access_token": "",
@@ -301,6 +325,7 @@ impl Authorization {
     }
 }
 
+/// Exchanges a refresh token for a new access token via the Google Secure Token API.
 async fn get_refreshed_authorization(
     refresh_token: String,
     api_key: String,
@@ -451,6 +476,7 @@ pub(crate) async fn get_api_key(client: &Client) -> Result<String, Box<dyn Error
     Err("auth constants script does not contain apikey".into())
 }
 
+/// Loads the persisted session from disk and refreshes the access token.
 pub(crate) async fn refresh_from_file() -> Result<Authorization, Box<dyn Error>> {
     let serialized_authorization = fs::read_to_string(MONKEYTYPE_REFRESH_TOKEN_PATH)?;
     let mut authorization: Authorization = serde_json::from_str(&serialized_authorization)?;

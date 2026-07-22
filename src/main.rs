@@ -49,6 +49,7 @@ use crate::{
 };
 use crate::{commandline::CommandLine, notify::QuickNotify};
 
+/// User-initiated actions dispatched to the game loop.
 #[derive(Default, Debug)]
 enum Action {
     Type(char),
@@ -60,6 +61,7 @@ enum Action {
     Idle,
 }
 
+/// Central application state shared across async tasks via [`Arc<Mutex<State>>`].
 #[derive(Default, Debug)]
 struct State {
     action: Action,
@@ -76,8 +78,10 @@ const DISPLAY_RATE: Duration = Duration::from_micros(8333);
 /// NOTE: 1000fps
 const KEY_UPDATE_RATE: Duration = Duration::from_millis(1);
 
+/// Application name used as the subdirectory for config, data, and cache paths.
 const APP_NAME: &str = "monkeytype-tui";
 
+/// Platform-specific configuration directory (`~/.config/monkeytype-tui`).
 pub(crate) static CONFIG_DIR: Lazy<PathBuf> = Lazy::new(|| {
     let p = dirs::config_dir()
         .expect("App configuration directory not found")
@@ -86,6 +90,7 @@ pub(crate) static CONFIG_DIR: Lazy<PathBuf> = Lazy::new(|| {
     p
 });
 
+/// Platform-specific data directory (`~/.local/share/monkeytype-tui`).
 pub(crate) static DATA_DIR: Lazy<PathBuf> = Lazy::new(|| {
     let p = dirs::data_dir()
         .expect("App data directory not found")
@@ -94,6 +99,7 @@ pub(crate) static DATA_DIR: Lazy<PathBuf> = Lazy::new(|| {
     p
 });
 
+/// Platform-specific cache directory (`~/.cache/monkeytype-tui`).
 pub(crate) static CACHE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     let p = dirs::cache_dir()
         .expect("App cache directory not found")
@@ -248,6 +254,9 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Renders the terminal UI at [`DISPLAY_RATE`] (120 fps).
+///
+/// Draws the command line, typing test, and notification overlays on each frame.
 fn display(
     state: Arc<Mutex<State>>,
     tracker: TaskTracker,
@@ -310,6 +319,8 @@ fn display(
     })
 }
 
+/// Reads terminal key events at [`KEY_UPDATE_RATE`] (1000 fps) and dispatches
+/// them to [`game::event_keypressed`].
 fn key_update(
     state: Arc<Mutex<State>>,
     tracker: TaskTracker,
@@ -349,6 +360,10 @@ fn key_update(
     })
 }
 
+/// Periodic update loop running at [`UPDATE_RATE`] (60 fps).
+///
+/// Drives notification expiry, command line fuzzy search, and automatic
+/// token refresh when the access token is about to expire.
 fn update(
     state: Arc<Mutex<State>>,
     _tracker: TaskTracker,

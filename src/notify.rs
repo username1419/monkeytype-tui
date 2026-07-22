@@ -22,19 +22,23 @@ use tokio::{
 // is truly a clusterfuck
 // i should really refactor this
 
+/// Wrapper around a tokio MPSC receiver that allows interior-mutable `try_recv`.
 #[derive(Debug)]
 struct MutableMpscReceiver(UnsafeCell<Receiver<Notification>>);
 unsafe impl Sync for MutableMpscReceiver {}
 
 impl MutableMpscReceiver {
+    /// Non-blocking attempt to receive a pending notification.
     fn try_recv(&self) -> Option<Notification> {
         unsafe { (*self.0.get()).try_recv().ok() }
     }
 }
 
+/// Queue of active notifications awaiting display or expiry.
 static NOTIFICATIONS: Lazy<Mutex<Vec<Notification>>> =
     Lazy::new(|| Mutex::new(Vec::with_capacity(12)));
 
+/// Global MPSC receiver for incoming notifications (interior-mutable).
 static NOTIFICATION_RECEIVER: LazyLock<MutableMpscReceiver> = LazyLock::new(|| {
     // NOTE: if we exceed this, were probably already fucked anyways
     let (tx, rx) = mpsc::channel(Semaphore::MAX_PERMITS);
@@ -44,21 +48,26 @@ static NOTIFICATION_RECEIVER: LazyLock<MutableMpscReceiver> = LazyLock::new(|| {
     MutableMpscReceiver(UnsafeCell::new(rx))
 });
 
+/// Sender half of the notification channel.
 static NOTIFICATION_SENDER: OnceLock<Sender<Notification>> = OnceLock::new();
 
+/// Returns a raw mutable pointer to the global notification receiver.
 fn receiver() -> *mut Receiver<Notification> {
     NOTIFICATION_RECEIVER.0.get()
 }
 
+/// Coordinates rendering and lifecycle of in-app notifications.
 pub(crate) struct NotificationManager;
 
 impl NotificationManager {
+    /// Attempts to render all active notifications into the frame (non-blocking).
     pub(crate) fn try_render(frame: &mut ratatui::Frame, _frame_width: u16, _frame_height: u16) {
         if let Ok(notifications) = NOTIFICATIONS.try_lock() {
             render_notifications(&notifications, frame);
         }
     }
 
+    /// Drains the notification channel and removes expired notifications.
     // NOTE: DO NOT CALL THIS TWICE, OR OUTSIDE OF UPDATE THREAD
     pub(crate) async fn update() {
         let mut notifications = NOTIFICATIONS.lock().unwrap();
@@ -75,8 +84,10 @@ impl NotificationManager {
     }
 }
 
+/// Width of a single notification popup in columns.
 const NOTIFICATION_WIDTH: u16 = 40;
 
+/// Renders a slice of notifications as right-aligned popup blocks in the frame.
 fn render_notifications(notifications: &[Notification], frame: &mut ratatui::Frame) {
     let area = frame.area();
     let mut running_length = 0_u16;
@@ -123,6 +134,7 @@ fn render_notifications(notifications: &[Notification], frame: &mut ratatui::Fra
     }
 }
 
+/// A single in-app notification with a title, message, severity level, and expiry time.
 #[derive(Debug)]
 pub(crate) struct Notification {
     title: String,
@@ -132,6 +144,7 @@ pub(crate) struct Notification {
 }
 
 impl Notification {
+    /// Creates a new notification directly (prefer [`Notification::builder`] instead).
     pub(super) fn new(
         title: String,
         message: String,
@@ -146,6 +159,7 @@ impl Notification {
         }
     }
 
+    /// Returns a [`NotificationBuilder`] for constructing a notification with a fluent API.
     pub(crate) fn builder<'a>() -> NotificationBuilder<'a> {
         NotificationBuilder::new()
     }
@@ -157,6 +171,7 @@ impl Display for Notification {
     }
 }
 
+/// Severity level of a [`Notification`], controlling its border color and display label.
 #[derive(Debug)]
 pub(crate) enum NotifLevel {
     Info,
@@ -178,19 +193,27 @@ impl Display for NotifLevel {
     }
 }
 
+/// Default display duration for quick notifications created via [`QuickNotify`].
 pub(crate) const DEFAULT_QUICKNOTIFY_DURATION: Duration = Duration::from_secs(4);
 
+/// Convenience trait for sending short-lived notifications with default duration.
 pub(crate) trait QuickNotify {
+    /// Sends an informational notification.
     fn info<T: Display>(&mut self, o: T);
+    /// Sends a success notification.
     fn success(&mut self, s: &str);
 }
 
+/// Opaque handle returned by [`notify()`] for sending notifications.
 pub(crate) struct Notify;
 
+/// Returns a [`Notify`] handle for sending notifications.
 pub(crate) fn notify() -> Notify {
     Notify
 }
 
+/// Sends a [`Notification`] through the global channel (or directly pushes when
+/// the channel is not yet initialized).
 pub(crate) fn send(notification: Notification) {
     #[cfg(not(test))]
     {
@@ -242,6 +265,7 @@ impl QuickNotify for Notify {
     }
 }
 
+/// Fluent builder for constructing [`Notification`] instances.
 pub(crate) struct NotificationBuilder<'a> {
     title: &'a str,
     message: &'a str,
@@ -250,6 +274,7 @@ pub(crate) struct NotificationBuilder<'a> {
 }
 
 impl<'a> NotificationBuilder<'a> {
+    /// Creates a new builder with empty defaults.
     pub(super) fn new() -> Self {
         Self {
             title: "",
@@ -259,26 +284,31 @@ impl<'a> NotificationBuilder<'a> {
         }
     }
 
+    /// Sets the notification title displayed in the popup header.
     pub(crate) fn title(mut self, s: &'a str) -> Self {
         self.title = s;
         self
     }
 
+    /// Sets the notification body text.
     pub(crate) fn message(mut self, s: &'a str) -> Self {
         self.message = s;
         self
     }
 
+    /// Sets how long the notification remains visible before auto-dismissing.
     pub(crate) fn duration(mut self, d: Duration) -> Self {
         self.duration = d;
         self
     }
 
+    /// Sets the severity level, which controls border color and label.
     pub(crate) fn notification_level(mut self, l: NotifLevel) -> Self {
         self.level = l;
         self
     }
 
+    /// Consumes the builder and produces a [`Notification`].
     pub(crate) fn build(self) -> Notification {
         Notification::new(
             self.title.into(),
@@ -289,6 +319,7 @@ impl<'a> NotificationBuilder<'a> {
     }
 }
 
+/// Sends a debug-level notification showing the expression's file, line, name, and value.
 macro_rules! debug {
     ($i:expr) => {
         match $i {
@@ -315,6 +346,7 @@ macro_rules! debug {
 }
 pub(crate) use debug;
 
+/// Sends an error-level notification showing the expression's file, line, name, and value.
 macro_rules! error {
     ($i:expr) => {
         match $i {
@@ -341,6 +373,7 @@ macro_rules! error {
 }
 pub(crate) use error;
 
+/// Sends an error-level notification without returning the expression value.
 macro_rules! enotify {
     ($i:expr) => {
         match $i {
@@ -366,6 +399,7 @@ macro_rules! enotify {
 }
 pub(crate) use enotify;
 
+/// Sends a "not yet implemented" error notification with the call-site location.
 macro_rules! todo {
     () => {
         use crate::notify::*;
@@ -385,6 +419,7 @@ macro_rules! todo {
 }
 pub(crate) use todo;
 
+/// Sends a warning-level notification with the expression's stringified value.
 macro_rules! wnotify {
     ($i:expr) => {
         match $i {

@@ -70,6 +70,7 @@ use crate::{
     notify::{debug, enotify},
 };
 
+/// Hypermedia links returned by the GitHub Contents API.
 #[derive(Deserialize, Debug, PartialEq)]
 pub(crate) struct GithubContentItemLinkCollection {
     pub(crate) git: String,
@@ -78,6 +79,7 @@ pub(crate) struct GithubContentItemLinkCollection {
     pub(crate) _self: String,
 }
 
+/// Whether a GitHub content entry is a file or a directory.
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum GithubContentItemType {
@@ -85,6 +87,7 @@ pub(crate) enum GithubContentItemType {
     Dir,
 }
 
+/// A single entry (file or directory) from the GitHub Contents API response.
 #[derive(Deserialize, Debug, PartialEq)]
 pub(crate) struct GithubContentItem {
     pub(crate) _links: GithubContentItemLinkCollection,
@@ -100,6 +103,7 @@ pub(crate) struct GithubContentItem {
     pub(crate) url: String,
 }
 
+/// A single tag object from the GitHub Tags API response.
 #[derive(Deserialize, Debug)]
 pub(crate) struct GithubTagsResponse {
     pub(crate) name: String,
@@ -109,14 +113,18 @@ pub(crate) struct GithubTagsResponse {
     pub(crate) node_id: String,
 }
 
+/// Commit metadata inside a [`GithubTagsResponse`] entry.
 #[derive(Deserialize, Debug)]
 pub(crate) struct GithubTagsResponseCommit {
     pub(crate) sha: String,
     pub(crate) url: String,
 }
 
+/// Path to the file that stores the currently cached game-asset version tag.
 static VERSIONING_FILE: Lazy<PathBuf> = Lazy::new(|| DATA_DIR.join("webclient_version"));
 
+/// Checks whether the locally cached game assets are out of date by comparing
+/// the stored version tag against the latest GitHub release tag.
 pub(crate) async fn has_version_changed() -> Result<bool, Box<dyn std::error::Error + Send + Sync>>
 {
     if fs::read_dir(DATA_DIR.as_path())
@@ -153,6 +161,7 @@ pub(crate) async fn get_tags(client: &Client) -> Result<Vec<String>, reqwest::Er
         .collect())
 }
 
+/// Directory names to skip when recursively downloading game assets.
 const IGNORE_DIR: &[&str] = &["images"];
 /// downloads the files in https://api.github.com/repos/monkeytypegame/monkeytype/contents/frontend/static?ref=[version]
 /// recursively, traversing using bfs
@@ -198,6 +207,8 @@ pub(crate) async fn download_resources_recursive(
     Ok(skipped.load(std::sync::atomic::Ordering::Acquire))
 }
 
+/// Recursively downloads a single GitHub content item (file or directory) into
+/// the local cache, spawning child tasks for nested directories.
 fn download_item(
     tracker: TaskTracker,
     item: GithubContentItem,

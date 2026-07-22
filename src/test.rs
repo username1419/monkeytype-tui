@@ -9,6 +9,7 @@ use tokio::time::Instant;
 
 use crate::traits::UpdateableWidget;
 
+/// A typing test session that tracks target words, user input, and display state.
 #[derive(Default)]
 pub(crate) struct Test {
     /// The word list which gets drawn. Tracks current_word_list
@@ -24,6 +25,8 @@ pub(crate) struct Test {
 }
 
 impl Test {
+    /// Appends a character to the current word, or advances to the next word
+    /// if the current word already matches the target.
     pub(crate) fn register_character(&mut self, character: char) {
         if self.current_word_list.is_empty() {
             self.current_word_list.push(String::new());
@@ -41,6 +44,7 @@ impl Test {
         self.regenerate_word_display();
     }
 
+    /// Removes the last character from the current word.
     pub(crate) fn register_delete_character(&mut self) {
         if self.current_word_list.is_empty() {
             return;
@@ -50,6 +54,7 @@ impl Test {
         self.regenerate_word_display();
     }
 
+    /// Clears the entire current word (Ctrl+Backspace / Ctrl+H).
     pub(crate) fn register_delete_word(&mut self) {
         if self.current_word_list.is_empty() {
             return;
@@ -59,10 +64,12 @@ impl Test {
         self.regenerate_word_display();
     }
 
+    /// Rebuilds the display string from the current word list.
     pub(crate) fn regenerate_word_display(&mut self) {
         self.display_word_list = self.current_word_list.join(" ");
     }
 
+    /// Resets the test to its initial empty state.
     pub(crate) fn reset(&mut self) {
         self.words_list = Vec::new();
         self.display_word_list = String::new();
@@ -89,5 +96,6 @@ impl UpdateableWidget for Test {
     async fn update(&mut self) {}
 }
 
+/// Global typing test instance, shared across threads.
 pub(crate) static TEST: Lazy<Arc<Mutex<Test>>> =
     Lazy::new(|| Arc::new(Mutex::new(Test::default())));

@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
+/// An interactive command line with fuzzy search, text input, and cursor navigation.
 #[derive(Debug)]
 pub(crate) struct CommandLine {
     // TODO: make cancel callback
@@ -29,6 +30,7 @@ pub(crate) struct CommandLine {
     submit_callback: Option<SubmitCallback>,
 }
 
+/// One-shot callback invoked when the command line input is submitted.
 struct SubmitCallback(pub Box<dyn FnOnce(String, Option<ClonedCommand>) + Send>);
 impl Debug for SubmitCallback {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,10 +49,12 @@ where
 }
 
 impl CommandLine {
+    /// Enables the command line, making it visible and ready for input.
     pub(crate) fn enable(&mut self) {
         self.enabled = true;
     }
 
+    /// Disables the command line, hiding it and resetting state unless in search mode.
     pub(crate) fn disable(&mut self) {
         self.enabled = false;
         if !self.is_searching() {
@@ -58,18 +62,22 @@ impl CommandLine {
         }
     }
 
+    /// Returns whether the command line is currently visible.
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
 
+    /// Returns whether the command line is in fuzzy-search mode (as opposed to prompt mode).
     pub(crate) fn is_searching(&self) -> bool {
         self.search
     }
 
+    /// Toggles between search mode and prompt mode.
     pub(crate) fn toggle_searching(&mut self) {
         self.search = !self.search;
     }
 
+    /// Moves the selection cursor up through the matched commands list.
     pub(crate) fn register_select_up(&mut self) {
         let Some(s) = self.selected_command else {
             return;
@@ -81,6 +89,7 @@ impl CommandLine {
         }
     }
 
+    /// Moves the selection cursor down through the matched commands list.
     pub(crate) fn register_select_down(&mut self) {
         let Some(s) = self.selected_command else {
             return;
@@ -92,19 +101,23 @@ impl CommandLine {
         }
     }
 
+    /// Shifts the text viewport left (increases cursor offset).
     pub(crate) fn register_move_left(&mut self) {
         self.cursor_offset = self.cursor_offset.saturating_add(1);
     }
 
+    /// Shifts the text viewport right (decreases cursor offset).
     pub(crate) fn register_move_right(&mut self) {
         self.cursor_offset = self.cursor_offset.saturating_sub(1);
     }
 
+    /// Inserts a character at the current cursor position.
     pub(crate) fn register_character(&mut self, character: char) {
         self.input
             .insert(self.input.len() - self.cursor_offset as usize, character);
     }
 
+    /// Removes the character before the cursor; disables the command line if input is empty.
     pub(crate) fn register_delete_character(&mut self) {
         if self.input.is_empty() {
             self.disable();
@@ -115,6 +128,7 @@ impl CommandLine {
             .remove(self.input.len() - self.cursor_offset as usize - 1_usize);
     }
 
+    /// Deletes the word before the cursor (Ctrl+Backspace / Ctrl+H).
     pub(crate) fn register_delete_word(&mut self) {
         let range_start = self
             .input
@@ -140,10 +154,13 @@ impl CommandLine {
         self.cursor_offset = self.input.len().saturating_sub(range_start) as u16;
     }
 
+    /// Returns the current input string.
     fn get_input(&self) -> &String {
         &self.input
     }
 
+    /// Submits the current input, invoking the callback with the input text
+    /// and the currently selected command (if any).
     pub(crate) fn submit(
         &mut self,
         remain_enabled: bool,
@@ -178,6 +195,7 @@ impl CommandLine {
         }
     }
 
+    /// Resets all command line state to defaults.
     pub(crate) fn reset(&mut self) {
         self.input.clear();
         self.cursor_offset = 0;
@@ -188,6 +206,7 @@ impl CommandLine {
         self.search = true;
     }
 
+    /// Switches to prompt mode with a custom prompt string and a one-shot submit callback.
     #[allow(private_bounds)]
     pub(crate) fn prompt_input(&mut self, prompt: String, callback: impl Into<SubmitCallback>) {
         self.reset();
@@ -198,11 +217,13 @@ impl CommandLine {
         self.submit_callback = Some(callback.into());
     }
 
+    /// Replaces the list of commands available for fuzzy search.
     pub(crate) fn set_selectable_commands(&mut self, v: Vec<Command>) {
         self.commands = v;
     }
 }
 
+/// Maximum number of fuzzy-match results displayed at once.
 const MAX_OPTIONS: u8 = 10;
 impl Default for CommandLine {
     fn default() -> Self {
@@ -221,7 +242,9 @@ impl Default for CommandLine {
     }
 }
 
+/// Width of the command line widget in columns.
 pub(crate) const COMMANDLINE_WIDTH: u16 = 60;
+/// Vertical offset from center for the command line position.
 pub(crate) const COMMANDLINE_Y_OFFSET: i16 = -10;
 impl UpdateableWidget for CommandLine {
     fn render(&self, frame: &mut ratatui::Frame, frame_width: u16, frame_height: u16) {

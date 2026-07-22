@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::{State, command::Command};
+use crate::{State, command::Command, typing_test::word_list};
 
+/// Creates the "Change language" command.
 pub(crate) fn create() -> Command {
     // NOTE: good old currying
     Command::new(
@@ -14,7 +15,9 @@ pub(crate) fn create() -> Command {
         Vec::new(),
         None,
         async move |s: Arc<Mutex<State>>| {
-            return Ok(());
+            s.lock().await.commandline.reset();
+
+            Ok(())
         },
     )
 }
