@@ -237,7 +237,7 @@ impl Authorization {
 
     /// Returns `true` if the access token has expired.
     pub(crate) fn is_access_expired(&self) -> bool {
-        self.get_expire_instant() - Instant::now() == Duration::ZERO
+        self.get_expire_instant() < Instant::now()
     }
 
     /// Returns `true` if a refresh token is present (i.e. the user has logged in).
@@ -377,8 +377,6 @@ async fn get_refreshed_authorization(
 pub(crate) async fn login(
     email: String,
     password: String,
-    // NOTE: honestly i dont know if using 'static here would be a good idea
-    // seems like a potential mem leak but not too sure
 ) -> Result<Authorization, Box<dyn Error + Send + Sync>> {
     let client = Client::builder()
         .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0")
