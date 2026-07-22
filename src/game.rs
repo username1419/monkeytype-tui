@@ -12,7 +12,11 @@ use crate::{State, notify::enotify, test::TEST};
 /// - `Ctrl+Q` — initiate shutdown
 /// - `Esc` — toggle command line
 /// - `Enter` — submit command line input
-/// - Printable characters — forwarded to the active input target
+/// - `Char` / `Shift+Char` — forwarded to the active input target
+/// - `Backspace` — delete character before cursor
+/// - `Ctrl+H` / `Ctrl+Backspace` — delete word before cursor
+/// - `Left` / `Right` — move cursor in command line
+/// - `Up` / `Down` — navigate matched commands in command line
 pub(crate) async fn event_keypressed(
     key: KeyEvent,
     state: Arc<Mutex<State>>,

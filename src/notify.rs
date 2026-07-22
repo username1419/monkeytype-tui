@@ -10,12 +10,10 @@ use std::{
     sync::{LazyLock, Mutex, OnceLock},
     time::{Duration, Instant},
 };
-use tokio::{
-    spawn,
-    sync::{
-        Semaphore,
-        mpsc::{self, Receiver, Sender},
-    },
+use tokio::spawn;
+use tokio::sync::{
+    Semaphore,
+    mpsc::{self, Receiver, Sender},
 };
 
 // NOTE: this notification system
@@ -376,7 +374,7 @@ pub(crate) use error;
 /// Sends an error-level notification without returning the expression value.
 macro_rules! enotify {
     ($i:expr) => {
-        match $i {
+        match &$i {
             tmp => {
                 use crate::notify::*;
                 send(

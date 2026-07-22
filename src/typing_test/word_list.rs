@@ -128,7 +128,7 @@ pub(crate) async fn update_and_get_words(
                 Ok(get_word_list().unwrap())
             }
             Err(err) => {
-                enotify!(&err);
+                enotify!(err);
                 Err(err.into())
             }
         },

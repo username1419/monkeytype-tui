@@ -36,9 +36,10 @@
 //! | `refreshToken` | Persistent token for renewal |
 //! | `expiresIn` | Token lifetime in seconds |
 //!
-//! # Token refresh (not yet implemented)
+//! # Token refresh
 //!
-//! When `idToken` expires, exchange the refresh token:
+//! When `idToken` expires, the update loop in [`main::update`] automatically
+//! exchanges the refresh token for a new access token:
 //!
 //! 1. `POST https://securetoken.googleapis.com/v1/token?key=<apiKey>`
 //!    with `Content-Type: application/x-www-form-urlencoded` and body
@@ -111,7 +112,7 @@ static MONKEYTYPE_APIKEY_CACHE: &str = "./apikey";
 /// Path to the persisted refresh token and session metadata.
 static MONKEYTYPE_REFRESH_TOKEN_PATH: &str = "./refresh_token";
 
-/// Tokens and metadata returned by Firebase sign-in (or, when implemented, token refresh).
+/// Tokens and metadata returned by Firebase sign-in or token refresh.
 #[derive(Default, Debug, Deserialize)]
 pub(crate) struct Authorization {
     api_key: String,
@@ -174,7 +175,8 @@ impl Authorization {
         })
     }
 
-    /// this function does not block the Mutex lock while it is waiting
+    /// Refreshes the access token using the stored refresh token, releasing
+    /// the global [`AUTHORIZATION`] lock before the network request.
     pub(crate) async fn refresh_non_blocking() -> Result<(), Box<dyn Error + Send + Sync>> {
         let refresh_token;
         let api_key;
@@ -370,7 +372,7 @@ async fn get_refreshed_authorization(
 /// Logs into monkeytype.com with email and password.
 ///
 /// Resolves the Firebase API key (using on-disk caches when present), then posts to
-/// Google's Identity Toolkit. Returns [`AuthorizationResponse`] containing `id_token`
+/// Google's Identity Toolkit. Returns an [`Authorization`] containing `id_token`
 /// and `refresh_token` on success.
 pub(crate) async fn login(
     email: String,

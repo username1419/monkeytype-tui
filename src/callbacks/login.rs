@@ -57,6 +57,7 @@ pub(crate) fn create() -> Command {
 }
 
 /// Opens the command line in prompt mode to collect the user's password.
+/// TODO: hide this
 async fn prompt_user_password(state: &Arc<Mutex<State>>) -> Result<String, String> {
     let (send, recv) = oneshot::channel::<(String, Option<ClonedCommand>)>();
     state

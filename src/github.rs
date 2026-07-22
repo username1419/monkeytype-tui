@@ -1,6 +1,6 @@
 //! Utility set of functions to interact with the monkeytype official github repository
 
-// TODO: get words list
+// get words list
 // steps:
 //   1. GET https://api.github.com/repos/monkeytypegame/monkeytype/tags
 //   2. parse into json
