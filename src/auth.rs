@@ -62,6 +62,8 @@
 use std::{
     error::Error,
     fs::{self, read_to_string, write},
+    io::ErrorKind,
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -80,7 +82,7 @@ use tokio::{
 };
 
 use crate::{
-    State,
+    CACHE_DIR, DATA_DIR, State,
     notify::{QuickNotify, enotify, error, notify},
 };
 
@@ -102,15 +104,19 @@ pub(crate) static CLIENT: Lazy<Client> = Lazy::new(|| {
 });
 
 /// Path to the cached monkeytype.com homepage HTML.
-static MONKEYTYPE_PAGE_CACHE: &str = "./monkeytype.html";
+static MONKEYTYPE_PAGE_CACHE: Lazy<Arc<Path>> =
+    Lazy::new(|| CACHE_DIR.join("pages/monkeytype.html").into());
 /// Path to the cached rolldown application bundle.
-static MONKEYTYPE_ROLLDOWN_CACHE: &str = "./monkeytype.js";
+static MONKEYTYPE_ROLLDOWN_CACHE: Lazy<Arc<Path>> =
+    Lazy::new(|| CACHE_DIR.join("pages/monkeytype.js").into());
 /// Path to the cached Firebase config script.
-static MONKEYTYPE_AUTH_CONSTANTS_CACHE: &str = "./auth-constants.js";
+static MONKEYTYPE_AUTH_CONSTANTS_CACHE: Lazy<Arc<Path>> =
+    Lazy::new(|| CACHE_DIR.join("pages/auth-constants.js").into());
 /// Path to the cached Firebase API key.
-static MONKEYTYPE_APIKEY_CACHE: &str = "./apikey";
+static MONKEYTYPE_APIKEY_CACHE: Lazy<Arc<Path>> = Lazy::new(|| DATA_DIR.join("apikey").into());
 /// Path to the persisted refresh token and session metadata.
-static MONKEYTYPE_REFRESH_TOKEN_PATH: &str = "./refresh_token";
+static MONKEYTYPE_REFRESH_TOKEN_PATH: Lazy<Arc<Path>> =
+    Lazy::new(|| DATA_DIR.join("refresh_token").into());
 
 /// Tokens and metadata returned by Firebase sign-in or token refresh.
 #[derive(Default, Debug, Deserialize)]
@@ -333,7 +339,7 @@ impl Authorization {
             "last_access_timestamp": "0",
         });
 
-        if let Err(e) = write(MONKEYTYPE_REFRESH_TOKEN_PATH, o.to_string()) {
+        if let Err(e) = write(&*MONKEYTYPE_REFRESH_TOKEN_PATH, o.to_string()) {
             spawn(async move {
                 error!(e);
             });
@@ -427,72 +433,99 @@ pub(crate) async fn login(
 
 /// Scrapes monkeytype.com for the Firebase `apiKey`, caching each intermediate fetch.
 pub(crate) async fn get_api_key(client: &Client) -> Result<String, Box<dyn Error + Send + Sync>> {
-    let page;
-    if let Ok(c) = read_to_string(MONKEYTYPE_PAGE_CACHE) {
-        page = c;
-    } else {
-        let response = client.get("https://monkeytype.com").send().await?;
-        let c = response.text().await?;
-
-        write(MONKEYTYPE_PAGE_CACHE, &c)?;
-        page = c;
+    if let Err(err) = fs::create_dir_all(MONKEYTYPE_PAGE_CACHE.parent().unwrap())
+        && err.kind() != ErrorKind::AlreadyExists
+    {
+        return Err(error!(err).into());
     }
 
-    let rolldown;
-    if let Ok(c) = read_to_string(MONKEYTYPE_ROLLDOWN_CACHE) {
-        rolldown = c;
-    } else {
-        let re = Regex::new(
-            r#"<script type="module" crossorigin src="(/js/monkeytype\.[a-zA-Z\d]*\.js)">"#,
-        )?;
-        if let Some(capture) = re.captures(&page) {
-            let path = &capture[1];
-            rolldown = client
-                .get(format!("https://monkeytype.com{}", path))
-                .send()
-                .await?
-                .text()
-                .await?;
-            write(MONKEYTYPE_ROLLDOWN_CACHE, &rolldown)?;
-        } else {
-            return Err("page does not contain rolldown script".into());
-        }
-    }
+    let page = get_monkeytype_page(client).await?;
 
-    let auth_script;
-    if let Ok(c) = read_to_string(MONKEYTYPE_AUTH_CONSTANTS_CACHE) {
-        auth_script = c;
-    } else {
-        let re = Regex::new(r#"(js/firebase-config-live\.[\d\w]*\.js)"#)?;
-        let path;
-        if let Some(capture) = re.captures(&rolldown) {
-            path = capture[1].to_string();
-        } else {
-            return Err("rolldown does not contain firebase auth constants script".into());
-        }
+    let rolldown = get_page_rolldown(client, page).await?;
 
-        auth_script = client
-            .get(format!("https://monkeytype.com/{}", path))
-            .send()
-            .await?
-            .text()
-            .await?;
-        write(MONKEYTYPE_AUTH_CONSTANTS_CACHE, &auth_script)?;
-    }
+    let auth_script = get_auth_const_page(client, rolldown).await?;
 
     let re = Regex::new(r#"apiKey:`([a-zA-Z\d_-]*)`"#)?;
     if let Some(capture) = re.captures(&auth_script) {
         let c = capture[1].to_string();
-        write(MONKEYTYPE_APIKEY_CACHE, &c)?;
+        write(&*MONKEYTYPE_APIKEY_CACHE, &c)?;
         return Ok(c);
     }
 
     Err("auth constants script does not contain apikey".into())
 }
 
+async fn get_auth_const_page(
+    client: &Client,
+    rolldown: String,
+) -> Result<String, Box<dyn Error + Send + Sync + 'static>> {
+    Ok(
+        if let Ok(c) = read_to_string(&*MONKEYTYPE_AUTH_CONSTANTS_CACHE) {
+            c
+        } else {
+            let re = Regex::new(r#"(js/firebase-config-live\.[\d\w]*\.js)"#)?;
+            let path;
+            if let Some(capture) = re.captures(&rolldown) {
+                path = capture[1].to_string();
+            } else {
+                return Err("rolldown does not contain firebase auth constants script".into());
+            }
+
+            let auth_script = client
+                .get(format!("https://monkeytype.com/{}", path))
+                .send()
+                .await?
+                .text()
+                .await?;
+            write(&*MONKEYTYPE_AUTH_CONSTANTS_CACHE, &auth_script)?;
+            auth_script
+        },
+    )
+}
+
+async fn get_page_rolldown(
+    client: &Client,
+    page: String,
+) -> Result<String, Box<dyn Error + Send + Sync + 'static>> {
+    Ok(if let Ok(c) = read_to_string(&*MONKEYTYPE_ROLLDOWN_CACHE) {
+        c
+    } else {
+        let re = Regex::new(
+            r#"<script type="module" crossorigin src="(/js/monkeytype\.[a-zA-Z\d]*\.js)">"#,
+        )?;
+        if let Some(capture) = re.captures(&page) {
+            let path = &capture[1];
+            let rolldown = client
+                .get(format!("https://monkeytype.com{}", path))
+                .send()
+                .await?
+                .text()
+                .await?;
+            write(&*MONKEYTYPE_ROLLDOWN_CACHE, &rolldown)?;
+            rolldown
+        } else {
+            return Err("page does not contain rolldown script".into());
+        }
+    })
+}
+
+async fn get_monkeytype_page(
+    client: &Client,
+) -> Result<String, Box<dyn Error + Send + Sync + 'static>> {
+    Ok(if let Ok(c) = read_to_string(&*MONKEYTYPE_PAGE_CACHE) {
+        c
+    } else {
+        let response = client.get("https://monkeytype.com").send().await?;
+        let c = response.text().await?;
+
+        write(&*MONKEYTYPE_PAGE_CACHE, &c)?;
+        c
+    })
+}
+
 /// Loads the persisted session from disk and refreshes the access token.
 pub(crate) async fn refresh_from_file() -> Result<Authorization, Box<dyn Error>> {
-    let serialized_authorization = fs::read_to_string(MONKEYTYPE_REFRESH_TOKEN_PATH)?;
+    let serialized_authorization = fs::read_to_string(&*MONKEYTYPE_REFRESH_TOKEN_PATH)?;
     let mut authorization: Authorization = serde_json::from_str(&serialized_authorization)?;
     let e = match get_refreshed_authorization(
         authorization.refresh_token.clone(),
