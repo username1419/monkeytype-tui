@@ -380,7 +380,7 @@ fn update(
 
                 // TODO: debounce time for token refresh
                 if let Ok(authorization) = AUTHORIZATION.lock()
-                    && authorization.get_expire_instant() < now
+                    && authorization.is_access_expired()
                     && !authorization.get_refresh_token().is_empty()
                     && !is_refreshing.load(std::sync::atomic::Ordering::Relaxed)
                 {
