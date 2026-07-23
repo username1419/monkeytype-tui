@@ -70,7 +70,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::{Client, header::HeaderMap};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::{
     join,
     runtime::{Handle, Runtime},
@@ -128,6 +128,28 @@ pub(crate) struct Authorization {
     project_id: String,
 }
 
+/// Response from `accounts:signInWithPassword`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginResponse {
+    display_name: String,
+    id_token: String,
+    expires_in: String,
+    refresh_token: String,
+}
+
+/// Response from the Google Secure Token refresh endpoint.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RefreshResponse {
+    access_token: String,
+    expires_in: String,
+    token_type: String,
+    refresh_token: String,
+    user_id: String,
+    project_id: String,
+}
+
 impl Authorization {
     /// Creates a new `Authorization` with all fields specified.
     #[cfg(debug_assertions)]
@@ -160,14 +182,14 @@ impl Authorization {
     pub(crate) fn from_login_response(
         response: String,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let obj: Value = serde_json::from_str(&response)?;
+        let r: LoginResponse = serde_json::from_str(&response)?;
 
         Ok(Self {
-            display_name: obj["displayName"].as_str().unwrap().into(),
-            access_token: obj["idToken"].as_str().unwrap().into(),
-            expires_in: Duration::from_secs(obj["expiresIn"].as_str().unwrap().parse()?),
+            display_name: r.display_name,
+            access_token: r.id_token,
+            expires_in: Duration::from_secs(r.expires_in.parse()?),
             token_type: String::default(),
-            refresh_token: obj["refreshToken"].as_str().unwrap().into(),
+            refresh_token: r.refresh_token,
             user_id: String::default(),
             project_id: String::default(),
             last_access_timestamp: Some(Instant::now()),
@@ -277,27 +299,19 @@ impl Authorization {
         }
     }
 
-    /// Parses the JSON request and response from the Google token refresh endpoint.
+    /// Parses the JSON response from the Google token refresh endpoint.
     pub(crate) fn from_refresh_response(
-        request: String,
         response: String,
     ) -> Result<Authorization, Box<dyn Error + Send + Sync>> {
-        let _request: Value = serde_json::from_str(&request)?;
-        let response: Value = serde_json::from_str(&response)?;
+        let r: RefreshResponse = serde_json::from_str(&response)?;
 
         Ok(Self {
-            access_token: response["access_token"].as_str().unwrap().into(),
-            expires_in: Duration::from_secs(
-                response["expires_in"]
-                    .as_str()
-                    .unwrap()
-                    .parse()
-                    .unwrap_or(0),
-            ),
-            token_type: response["token_type"].as_str().unwrap().into(),
-            refresh_token: response["refresh_token"].as_str().unwrap().into(),
-            user_id: response["user_id"].as_str().unwrap().into(),
-            project_id: response["project_id"].as_str().unwrap().into(),
+            access_token: r.access_token,
+            expires_in: Duration::from_secs(r.expires_in.parse().unwrap_or(0)),
+            token_type: r.token_type,
+            refresh_token: r.refresh_token,
+            user_id: r.user_id,
+            project_id: r.project_id,
             api_key: String::default(),
             display_name: String::default(),
             last_access_timestamp: Some(Instant::now()),
@@ -364,7 +378,7 @@ async fn get_refreshed_authorization(
             .into());
     }
     let response_text = response.text().await?;
-    let mut authorization = Authorization::from_refresh_response(request_body, response_text)?;
+    let mut authorization = Authorization::from_refresh_response(response_text)?;
     authorization.api_key = api_key;
     Ok(authorization)
 }

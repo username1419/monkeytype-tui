@@ -101,7 +101,7 @@ fn from_refresh_response_parses_token_json() {
         "project_id": "proj-1"
     }"#;
 
-    let auth = Authorization::from_refresh_response("{}".into(), response.into()).unwrap();
+    let auth = Authorization::from_refresh_response(response.into()).unwrap();
 
     assert_eq!(auth.get_access_token(), "access-abc");
     assert_eq!(auth.get_expires_in(), &Duration::from_secs(3600));
