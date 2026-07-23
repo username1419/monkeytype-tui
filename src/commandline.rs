@@ -297,7 +297,7 @@ impl UpdateableWidget for CommandLine {
             return;
         }
 
-        let c = ROOT_COMMANDS.clone();
+        let c = &*ROOT_COMMANDS;
         let len = self.matched_commands.len();
         for (m_idx, idx) in self.matched_commands.iter().enumerate() {
             let command = match self.root_command.is_none() {
