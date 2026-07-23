@@ -439,6 +439,10 @@ pub(crate) async fn get_api_key(client: &Client) -> Result<String, Box<dyn Error
         return Err(error!(err).into());
     }
 
+    if let Ok(api_key) = fs::read_to_string(&*MONKEYTYPE_APIKEY_CACHE) {
+        return Ok(api_key);
+    }
+
     let page = get_monkeytype_page(client).await?;
 
     let rolldown = get_page_rolldown(client, page).await?;
