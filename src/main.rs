@@ -15,10 +15,14 @@ use std::{
     env,
     error::Error,
     fs::{create_dir_all, read_to_string, remove_dir_all, write},
+    hint::spin_loop,
     io::{self, Read, Write, stdin},
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32},
+    },
     time::Duration,
 };
 
@@ -27,6 +31,7 @@ use once_cell::sync::Lazy;
 use ratatui::{
     layout::{Alignment, Rect, Size},
     style::Stylize,
+    text::{Text, ToText},
     widgets::{Block, Paragraph, Wrap},
 };
 use tokio::{
@@ -254,6 +259,8 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+const SHOW_FPS: bool = true;
+
 /// Renders the terminal UI at [`DISPLAY_RATE`] (120 fps).
 ///
 /// Draws the command line, typing test, and notification overlays on each frame.
@@ -263,9 +270,11 @@ fn display(
 ) -> JoinHandle<Result<(), Box<dyn Error + Send + Sync>>> {
     tracker.spawn(async move {
         let mut terminal = ratatui::init();
+        let mut past_fps = [0_f32; 20];
+        let mut avg_fps = 0_f32;
 
         loop {
-            let now = Instant::now();
+            let last = Instant::now();
             let mut state = state.lock().await;
             terminal.draw(|frame| {
                 let area = frame.area();
@@ -300,6 +309,9 @@ fn display(
                 if let Ok(t) = TEST.try_lock() {
                     t.render(frame, width, height);
                 }
+                if SHOW_FPS {
+                    frame.render_widget(avg_fps.to_text(), Rect::new(1, 1, 10, 1));
+                }
                 NotificationManager::try_render(frame, width, height);
             })?;
 
@@ -309,10 +321,17 @@ fn display(
 
             drop(state);
 
-            let delta = Instant::now() - now;
+            let now = Instant::now();
+            let mut delta = now.saturating_duration_since(last);
             if delta < DISPLAY_RATE {
-                sleep(DISPLAY_RATE - delta).await;
+                wait_for(DISPLAY_RATE - delta).await;
+                let now = Instant::now();
+                delta = now.saturating_duration_since(last);
             }
+            let current_fps = (1.0 / delta.as_secs_f32()) * 100.0;
+            past_fps[19] = current_fps;
+            past_fps.rotate_left(1);
+            avg_fps = (past_fps.iter().sum::<f32>() / 20.0 / 100.0).trunc();
         }
 
         Ok(())
@@ -350,7 +369,7 @@ fn key_update(
 
             let delta = Instant::now() - now;
             if delta < KEY_UPDATE_RATE {
-                sleep(KEY_UPDATE_RATE - delta).await;
+                wait_for(KEY_UPDATE_RATE - delta).await;
             }
         }
     })
@@ -399,8 +418,17 @@ fn update(
 
             let delta = Instant::now() - now;
             if delta < UPDATE_RATE {
-                sleep(UPDATE_RATE - delta).await;
+                wait_for(UPDATE_RATE - delta).await;
             }
         }
     })
+}
+
+const ONE_MS: Duration = Duration::from_millis(1);
+async fn wait_for(duration: Duration) {
+    let start = Instant::now();
+    sleep(duration.saturating_sub(ONE_MS)).await;
+    while start.elapsed() < duration {
+        spin_loop();
+    }
 }
