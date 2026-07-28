@@ -430,10 +430,10 @@ fn update(
     })
 }
 
-const ONE_MS: Duration = Duration::from_millis(1);
+const MS_OFFSET: Duration = Duration::from_millis(2);
 async fn wait_for(duration: Duration) {
     let start = Instant::now();
-    sleep(duration.saturating_sub(ONE_MS)).await;
+    sleep(duration.saturating_sub(MS_OFFSET)).await;
     while start.elapsed() < duration {
         spin_loop();
     }
