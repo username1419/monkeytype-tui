@@ -1,9 +1,3 @@
-use std::env;
-use std::fs::create_dir_all;
-use std::fs::remove_dir_all;
-use std::fs::write;
-use std::path::Path;
-
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -111,25 +105,132 @@ fn from_refresh_response_parses_token_json() {
     assert_eq!(auth.get_project_id(), "proj-1");
 }
 
+// Reads the cached Firebase API key straight from the real data directory.
+// No network is involved (get_api_key short-circuits on the on-disk cache); the
+// test is skipped entirely when the cache has never been populated.
 #[tokio::test]
-async fn get_api_key_reads_from_project_cache_files() {
-    if !Path::new("./monkeytype.html").exists()
-        || !Path::new("./monkeytype.js").exists()
-        || !Path::new("./auth-constants.js").exists()
-    {
+async fn get_api_key_reads_cached_apikey() {
+    let cached = crate::DATA_DIR.join("apikey");
+    let Ok(contents) = std::fs::read_to_string(&cached) else {
         return;
-    }
+    };
 
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0")
-        .build()
-        .unwrap();
-
+    let client = reqwest::Client::new();
     let api_key = crate::auth::get_api_key(&client).await.unwrap();
 
-    assert!(!api_key.is_empty());
-    if Path::new("./apikey").exists() {
-        let cached = std::fs::read_to_string("./apikey").unwrap();
-        assert_eq!(api_key, cached.trim());
+    assert_eq!(api_key, contents.trim());
+}
+
+#[test]
+fn is_logged_in_requires_refresh_token() {
+    let logged_in = Authorization::new(
+        String::new(),
+        String::new(),
+        String::new(),
+        None,
+        3600,
+        String::new(),
+        "refresh-token".into(),
+        String::new(),
+        String::new(),
+    );
+    assert!(logged_in.is_logged_in());
+
+    let logged_out = Authorization::new(
+        String::new(),
+        String::new(),
+        String::new(),
+        None,
+        3600,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
+    assert!(!logged_out.is_logged_in());
+}
+
+#[test]
+fn access_expiry_depends_on_timestamp_and_duration() {
+    // Fresh token: issued now, lives for an hour.
+    let fresh = Authorization::new(
+        String::new(),
+        String::new(),
+        String::new(),
+        Some(Instant::now()),
+        3600,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
+    assert!(!fresh.is_access_expired());
+    assert!(fresh.get_expire_instant() > Instant::now());
+
+    // Stale token: issued an hour ago, lives for a second.
+    let stale = Authorization::new(
+        String::new(),
+        String::new(),
+        String::new(),
+        Some(Instant::now() - Duration::from_secs(3600)),
+        1,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
+    assert!(stale.is_access_expired());
+    assert!(stale.get_expire_instant() < Instant::now());
+
+    // No timestamp: defaults to now, so a positive lifetime is not yet expired.
+    let no_timestamp = Authorization::new(
+        String::new(),
+        String::new(),
+        String::new(),
+        None,
+        3600,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    );
+    assert!(!no_timestamp.is_access_expired());
+}
+
+#[test]
+fn save_to_disk_writes_expected_refresh_token_json() {
+    let path = crate::DATA_DIR.join("refresh_token");
+    let original = std::fs::read_to_string(&path).ok();
+
+    let auth = Authorization::new(
+        "api-key".into(),
+        "TestUser".into(),
+        "access-token".into(),
+        Some(Instant::now()),
+        3600,
+        "Bearer".into(),
+        "refresh-token".into(),
+        "user-123".into(),
+        "project-abc".into(),
+    );
+    auth.save_to_disk();
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+    assert_eq!(json["refresh_token"], "refresh-token");
+    assert_eq!(json["display_name"], "TestUser");
+    assert_eq!(json["user_id"], "user-123");
+    assert_eq!(json["project_id"], "project-abc");
+    assert_eq!(json["token_type"], "Bearer");
+    assert_eq!(json["api_key"], "api-key");
+
+    // Restore the pre-test state so we don't clobber a real session file.
+    match original {
+        Some(contents) => {
+            std::fs::write(&path, contents).unwrap();
+        }
+        None => {
+            std::fs::remove_file(&path).ok();
+        }
     }
 }

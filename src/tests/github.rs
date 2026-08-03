@@ -5,7 +5,8 @@ use tokio::{runtime::Runtime, time::Instant};
 use crate::{
     auth::USER_AGENT,
     github::{
-        GithubContentItem, GithubContentItemLinkCollection, download_resources_recursive, get_tags,
+        GithubContentItem, GithubContentItemLinkCollection, download_resources_recursive,
+        get_tags, has_version_changed,
     },
     notify::{NotificationManager, Notify, notify},
 };
@@ -114,4 +115,21 @@ fn download_test() {
 
     println!("Completed. Skipped {} files.", c);
     println!("Process took {} seconds", duration.as_secs_f64());
+}
+
+// With an empty data directory `has_version_changed` short-circuits to
+// `Ok(true)` without any network access. This is environment-dependent: it only
+// holds when the real data dir is empty, so the test skips itself otherwise.
+// It is also sensitive to test ordering (other tests may write into DATA_DIR).
+#[tokio::test]
+async fn has_version_changed_true_when_data_dir_empty() {
+    let Ok(mut entries) = tokio::fs::read_dir(crate::DATA_DIR.as_path()).await else {
+        return;
+    };
+    if entries.next_entry().await.ok().flatten().is_some() {
+        return;
+    }
+
+    let changed = has_version_changed().await.unwrap();
+    assert!(changed);
 }
