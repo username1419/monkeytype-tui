@@ -275,54 +275,53 @@ fn display(
 
         loop {
             let last = Instant::now();
-            if let Ok(mut state) = state.try_lock() {
-                terminal.draw(|frame| {
-                    let area = frame.area();
-                    state.terminal_size = area.as_size();
-                    let width = area.width;
-                    let height = area.height;
-
-                    frame.render_widget(
-                        Block::bordered().title_top("sup").blue(),
-                        Rect::new(0, 0, 250, 250),
-                    );
-
-                    if state.shutdown.is_cancelled() {
-                        let mut rect = frame.area();
-                        rect = rect.resize(Size::new(40, 4));
-                        rect.x = frame.area().width / 2 - rect.width / 2;
-                        rect.y = frame.area().height / 2 - rect.height / 2;
-                        frame.render_widget(
-                            Paragraph::new("Waiting for background tasks to finish...")
-                                .wrap(Wrap { trim: true })
-                                .block(
-                                    Block::bordered()
-                                        .title("Exit")
-                                        .title_alignment(Alignment::Center),
-                                )
-                                .centered(),
-                            rect,
-                        );
-                    }
-
-                    state.commandline.render(frame, width, height);
-                    if let Ok(t) = TEST.try_lock() {
-                        t.render(frame, width, height);
-                    }
-                    if SHOW_FPS {
-                        frame.render_widget(avg_fps.to_text(), Rect::new(1, 1, 10, 1));
-                    }
-                    NotificationManager::try_render(frame, width, height);
-                })?;
-
-                if state.shutdown.is_cancelled() {
-                    break;
-                }
-
-                drop(state);
-            } else {
+            let Ok(mut state) = state.try_lock() else {
                 continue;
             };
+            terminal.draw(|frame| {
+                let area = frame.area();
+                state.terminal_size = area.as_size();
+                let width = area.width;
+                let height = area.height;
+
+                frame.render_widget(
+                    Block::bordered().title_top("sup").blue(),
+                    Rect::new(0, 0, 250, 250),
+                );
+
+                if state.shutdown.is_cancelled() {
+                    let mut rect = frame.area();
+                    rect = rect.resize(Size::new(40, 4));
+                    rect.x = frame.area().width / 2 - rect.width / 2;
+                    rect.y = frame.area().height / 2 - rect.height / 2;
+                    frame.render_widget(
+                        Paragraph::new("Waiting for background tasks to finish...")
+                            .wrap(Wrap { trim: true })
+                            .block(
+                                Block::bordered()
+                                    .title("Exit")
+                                    .title_alignment(Alignment::Center),
+                            )
+                            .centered(),
+                        rect,
+                    );
+                }
+
+                state.commandline.render(frame, width, height);
+                if let Ok(t) = TEST.try_lock() {
+                    t.render(frame, width, height);
+                }
+                if SHOW_FPS {
+                    frame.render_widget(avg_fps.to_text(), Rect::new(1, 1, 10, 1));
+                }
+                NotificationManager::try_render(frame, width, height);
+            })?;
+
+            if state.shutdown.is_cancelled() {
+                break;
+            }
+
+            drop(state);
 
             let now = Instant::now();
             let mut delta = now.saturating_duration_since(last);
