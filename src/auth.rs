@@ -49,15 +49,17 @@
 //!
 //! # Cache files
 //!
-//! Fetched assets are written beside the working directory to avoid repeated scraping
-//! (and Cloudflare exposure) within a session:
+//! Intermediate fetches are cached on disk to avoid repeated scraping (and Cloudflare
+//! exposure) within a session. Paths are relative to the platform-specific app
+//! directories ([`crate::CACHE_DIR`] and [`crate::DATA_DIR`]):
 //!
-//! | File | Contents |
+//! | Path | Contents |
 //! |------|----------|
-//! | `./monkeytype.html` | Homepage HTML |
-//! | `./monkeytype.js` | Rolldown application bundle |
-//! | `./auth-constants.js` | `firebase-config-live.*.js` |
-//! | `./apikey` | Parsed Firebase `apiKey` |
+//! | `<cache>/pages/monkeytype.html` | Homepage HTML |
+//! | `<cache>/pages/monkeytype.js` | Rolldown application bundle |
+//! | `<cache>/pages/auth-constants.js` | `firebase-config-live.*.js` |
+//! | `<data>/apikey` | Parsed Firebase `apiKey` |
+//! | `<data>/refresh_token` | Persisted session tokens and user metadata |
 
 use std::{
     error::Error,

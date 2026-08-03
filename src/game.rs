@@ -10,6 +10,7 @@ use crate::{State, notify::enotify, test::TEST};
 ///
 /// Keybindings:
 /// - `Ctrl+Q` — initiate shutdown
+/// - `Ctrl+F10` — trigger a debug notification
 /// - `Esc` — toggle command line
 /// - `Enter` — submit command line input
 /// - `Char` / `Shift+Char` — forwarded to the active input target
