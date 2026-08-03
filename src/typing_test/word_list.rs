@@ -119,6 +119,7 @@ pub(crate) async fn update_and_get_words(
 ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
     let mut rel_path = OsString::from("languages/");
     rel_path.push(language.into());
+    rel_path.push(".json");
     let file_contents = fs::read_to_string(CACHE_DIR.join(rel_path)).await;
 
     match file_contents {
