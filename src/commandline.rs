@@ -218,8 +218,23 @@ impl CommandLine {
     }
 
     /// Replaces the list of commands available for fuzzy search.
-    pub(crate) fn set_selectable_commands(&mut self, v: Vec<Command>) {
+    fn set_selectable_commands(&mut self, v: Vec<Command>) {
         self.commands = v;
+    }
+
+    pub(crate) fn prompt_command(
+        &mut self,
+        prompt: String,
+        selectable_commands: Vec<Command>,
+        callback: impl Into<SubmitCallback>,
+    ) {
+        self.reset();
+        self.prompt = prompt;
+        self.search = true;
+        self.set_selectable_commands(selectable_commands);
+        self.enable();
+
+        self.submit_callback = Some(callback.into());
     }
 }
 
