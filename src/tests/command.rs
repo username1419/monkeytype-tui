@@ -13,7 +13,6 @@ fn sample_command() -> Command {
         "test mode".into(),
         CommandGroup::Test,
         || async { Ok(true) },
-        vec!["words".into(), "time".into()],
         Some("words".into()),
         |_: Arc<Mutex<State>>| async { Ok(()) },
     )
@@ -26,10 +25,6 @@ fn command_new_and_getters() {
     assert_eq!(command.get_id(), "test.mode");
     assert_eq!(command.get_display_name(), "test mode");
     assert!(matches!(command.get_group(), CommandGroup::Test));
-    assert_eq!(
-        command.get_options(),
-        &vec!["words".to_string(), "time".to_string()]
-    );
     assert_eq!(command.get_selected_option(), Some(&"words".to_string()));
 }
 
@@ -46,7 +41,6 @@ async fn command_call_invokes_handler() {
         "echo".into(),
         CommandGroup::Other,
         || async { Ok(true) },
-        vec![],
         None,
         |_: Arc<Mutex<State>>| async { Ok(()) },
     );

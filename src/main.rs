@@ -355,6 +355,8 @@ fn key_update(
                 event::Event::FocusLost => {}
                 event::Event::Key(key_event) => {
                     let state = state.clone();
+                    // NOTE: not too sure if deepcloning state or using a mutex would be more
+                    // performant, may need more testing
                     tracker.spawn(async move {
                         game::event_keypressed(key_event, state).await.ok();
                     });

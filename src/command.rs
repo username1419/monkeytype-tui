@@ -18,8 +18,6 @@ pub(crate) struct Command {
     group: CommandGroup,
     /// The condition in which the command is shown
     display_condition: Condition,
-    /// Sub-options for the command
-    sub_options: Vec<String>,
     /// The selected sub-option
     selected_option: Option<String>,
     /// Callback which executes when the command is selected
@@ -50,7 +48,6 @@ impl Command {
         display_name: String,
         group: CommandGroup,
         display_condition: impl Into<Condition>,
-        sub_options: Vec<String>,
         selected_option: Option<String>,
         handler: impl Into<CommandCallback>,
     ) -> Self {
@@ -59,7 +56,6 @@ impl Command {
             display_name,
             group,
             display_condition: display_condition.into(),
-            sub_options,
             selected_option,
             handler: handler.into(),
         }
@@ -80,11 +76,6 @@ impl Command {
         &self.group
     }
 
-    /// Returns the available sub-options for this command.
-    pub fn get_options(&self) -> &Vec<String> {
-        &self.sub_options
-    }
-
     /// Returns the currently selected sub-option, if any.
     pub fn get_selected_option(&self) -> Option<&String> {
         self.selected_option.as_ref()
@@ -101,7 +92,6 @@ impl Command {
             id: self.id.clone(),
             display_name: self.display_name.clone(),
             group: self.group.clone(),
-            options: self.sub_options.clone(),
             selected_option: self.selected_option.clone(),
         }
     }
@@ -113,7 +103,6 @@ pub(crate) struct ClonedCommand {
     id: String,
     display_name: String,
     group: CommandGroup,
-    options: Vec<String>,
     selected_option: Option<String>,
 }
 

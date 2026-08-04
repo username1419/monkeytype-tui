@@ -45,19 +45,17 @@ async fn command_handler_prompt_flow_returns_typed_input() {
         "echo".into(),
         CommandGroup::Other,
         || async { Ok(true) },
-        vec![],
         None,
         move |state: Arc<Mutex<State>>| {
             let sink = sink.clone();
             async move {
                 let (tx, rx) = oneshot::channel();
-                state
-                    .lock()
-                    .await
-                    .commandline
-                    .prompt_input("Enter name".into(), move |input, _| {
+                state.lock().await.commandline.prompt_input(
+                    "Enter name".into(),
+                    move |input, _| {
                         tx.send(input).ok();
-                    });
+                    },
+                );
                 let input = rx.await.map_err(|_| "prompt dropped".to_string())?;
                 *sink.lock().unwrap() = Some(input);
                 Ok(())
@@ -80,7 +78,6 @@ async fn command_handler_prompt_flow_rejects_empty_input() {
         "required".into(),
         CommandGroup::Other,
         || async { Ok(true) },
-        vec![],
         None,
         |state: Arc<Mutex<State>>| async move {
             let (tx, rx) = oneshot::channel();
@@ -117,7 +114,6 @@ async fn command_handler_can_read_injected_fake_authorization() {
         "auth check".into(),
         CommandGroup::Other,
         || async { Ok(true) },
-        vec![],
         None,
         |_state: Arc<Mutex<State>>| async move {
             let auth = AUTHORIZATION.lock().expect("AUTHORIZATION is poisoned");

@@ -19,7 +19,6 @@ pub(crate) fn create() -> Command {
             let authorization = AUTHORIZATION.lock().expect("AUTHORIZATION is poisoned");
             Ok(authorization.is_logged_in())
         },
-        Vec::default(),
         None,
         |state: Arc<Mutex<State>>| async move {
             let Ok(email) = prompt_user_email(&state).await else {

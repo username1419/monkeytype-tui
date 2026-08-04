@@ -6,13 +6,11 @@ use crate::{State, command::Command, typing_test::word_list};
 
 /// Creates the "Change language" command.
 pub(crate) fn create() -> Command {
-    // NOTE: good old currying
     Command::new(
-        "changelanguage".into(),
+        "changeLanguage".into(),
         "Change language".into(),
         crate::command::CommandGroup::Test,
         async move || Ok(true),
-        Vec::new(),
         None,
         async move |s: Arc<Mutex<State>>| {
             s.lock().await.commandline.reset();

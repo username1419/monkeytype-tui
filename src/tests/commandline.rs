@@ -207,7 +207,7 @@ async fn search_mode_update_populates_matches_and_submit_returns_selected_comman
 
     let (input, id) = captured.lock().unwrap().take().unwrap();
     assert_eq!(input, "change");
-    assert_eq!(id.as_deref(), Some("changelanguage"));
+    assert_eq!(id.as_deref(), Some("changeLanguage"));
     assert!(!cl.is_enabled());
 }
 
