@@ -222,6 +222,7 @@ impl CommandLine {
         self.commands = v;
     }
 
+    #[allow(private_bounds)]
     pub(crate) fn prompt_command(
         &mut self,
         prompt: String,
