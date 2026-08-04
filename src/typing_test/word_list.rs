@@ -6,7 +6,10 @@ use tokio::{fs, io};
 
 use crate::{CACHE_DIR, notify::enotify};
 
-/// Returns the file stems of all downloaded language word lists in the cache directory.
+/// Returns a list of all downloaded language word lists in the cache directory.
+///
+/// Functionality-wise, this function retrieves the file stem of all files within
+/// [`CACHE_DIR`]/languages
 pub(crate) async fn get_word_lists() -> io::Result<Vec<OsString>> {
     let dirs = fs::read_dir(CACHE_DIR.join("languages")).await;
 
