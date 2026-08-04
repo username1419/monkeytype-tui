@@ -19,7 +19,7 @@ pub(crate) struct Command {
     /// The condition in which the command is shown
     display_condition: Condition,
     /// The selected sub-option
-    selected_option: Option<String>,
+    selected_option: Option<usize>,
     /// Callback which executes when the command is selected
     handler: CommandCallback,
 }
@@ -48,7 +48,7 @@ impl Command {
         display_name: String,
         group: CommandGroup,
         display_condition: impl Into<Condition>,
-        selected_option: Option<String>,
+        selected_option: Option<usize>,
         handler: impl Into<CommandCallback>,
     ) -> Self {
         Self {
@@ -77,8 +77,8 @@ impl Command {
     }
 
     /// Returns the currently selected sub-option, if any.
-    pub fn get_selected_option(&self) -> Option<&String> {
-        self.selected_option.as_ref()
+    pub fn get_selected_option(&self) -> Option<usize> {
+        self.selected_option
     }
 
     /// Spawns the command's async handler with the given application state.
@@ -92,7 +92,7 @@ impl Command {
             id: self.id.clone(),
             display_name: self.display_name.clone(),
             group: self.group.clone(),
-            selected_option: self.selected_option.clone(),
+            selected_option: self.selected_option,
         }
     }
 }
@@ -103,7 +103,7 @@ pub(crate) struct ClonedCommand {
     id: String,
     display_name: String,
     group: CommandGroup,
-    selected_option: Option<String>,
+    selected_option: Option<usize>,
 }
 
 /// Fuzzy-match a list of commands against a user prompt.
