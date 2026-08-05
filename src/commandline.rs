@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{
     command::{ClonedCommand, Command, Fuzzy, ROOT_COMMANDS},
-    notify::{self, QuickNotify, debug},
+    notify::{self},
     traits::UpdateableWidget,
 };
 use ratatui::{
@@ -85,7 +85,7 @@ impl CommandLine {
         let Some(s) = self.selected_command else {
             return;
         };
-        let s = s.saturating_add(1);
+        let s = s.saturating_sub(1);
 
         if self.matched_commands.len() > s {
             self.selected_command = Some(s);
@@ -98,7 +98,7 @@ impl CommandLine {
         let Some(s) = self.selected_command else {
             return;
         };
-        let s = s.saturating_sub(1);
+        let s = s.saturating_add(1);
 
         if self.matched_commands.len() > s {
             self.selected_command = Some(s);
@@ -351,7 +351,7 @@ impl UpdateableWidget for CommandLine {
                 widget,
                 Rect::new(
                     text_input_position.x,
-                    text_input_position.y + 3,
+                    text_input_position.y + 3 + m_idx as u16,
                     COMMANDLINE_WIDTH - 4,
                     1,
                 ),
