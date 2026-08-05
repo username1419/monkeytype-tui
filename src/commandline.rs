@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{
     command::{ClonedCommand, Command, Fuzzy, ROOT_COMMANDS},
-    notify,
+    notify::{self, QuickNotify, debug},
     traits::UpdateableWidget,
 };
 use ratatui::{
@@ -16,6 +16,7 @@ use ratatui::{
 pub(crate) struct CommandLine {
     // TODO: make cancel callback
     enabled: bool,
+    is_dirty: bool,
     search: bool,
     prompt: String,
     commands: Vec<Command>,
@@ -52,6 +53,7 @@ impl CommandLine {
     /// Enables the command line, making it visible and ready for input.
     pub(crate) fn enable(&mut self) {
         self.enabled = true;
+        self.is_dirty = true;
     }
 
     /// Disables the command line, hiding it and resetting state unless in search mode.
@@ -75,6 +77,7 @@ impl CommandLine {
     /// Toggles between search mode and prompt mode.
     pub(crate) fn toggle_searching(&mut self) {
         self.search = !self.search;
+        self.is_dirty = true;
     }
 
     /// Moves the selection cursor up through the matched commands list.
@@ -87,6 +90,7 @@ impl CommandLine {
         if self.matched_commands.len() > s {
             self.selected_command = Some(s);
         }
+        self.is_dirty = true;
     }
 
     /// Moves the selection cursor down through the matched commands list.
@@ -99,6 +103,7 @@ impl CommandLine {
         if self.matched_commands.len() > s {
             self.selected_command = Some(s);
         }
+        self.is_dirty = true;
     }
 
     /// Shifts the text viewport left (increases cursor offset).
@@ -115,6 +120,7 @@ impl CommandLine {
     pub(crate) fn register_character(&mut self, character: char) {
         self.input
             .insert(self.input.len() - self.cursor_offset as usize, character);
+        self.is_dirty = true;
     }
 
     /// Removes the character before the cursor; disables the command line if input is empty.
@@ -126,6 +132,7 @@ impl CommandLine {
 
         self.input
             .remove(self.input.len() - self.cursor_offset as usize - 1_usize);
+        self.is_dirty = true;
     }
 
     /// Deletes the word before the cursor (Ctrl+Backspace / Ctrl+H).
@@ -152,6 +159,7 @@ impl CommandLine {
             })
             .collect();
         self.cursor_offset = self.input.len().saturating_sub(range_start) as u16;
+        self.is_dirty = true;
     }
 
     /// Returns the current input string.
@@ -193,6 +201,7 @@ impl CommandLine {
         if !remain_enabled {
             self.disable();
         }
+        self.is_dirty = true;
     }
 
     /// Resets all command line state to defaults.
@@ -204,6 +213,8 @@ impl CommandLine {
         self.submit_callback = None;
         self.prompt = "Search...".into();
         self.search = true;
+        self.root_command = None;
+        self.is_dirty = true;
     }
 
     /// Switches to prompt mode with a custom prompt string and a one-shot submit callback.
@@ -212,20 +223,21 @@ impl CommandLine {
         self.reset();
         self.prompt = prompt;
         self.search = false;
-        self.enable();
-
         self.submit_callback = Some(callback.into());
+        self.enable();
     }
 
     /// Replaces the list of commands available for fuzzy search.
     fn set_selectable_commands(&mut self, v: Vec<Command>) {
         self.commands = v;
+        self.is_dirty = true;
     }
 
     #[allow(private_bounds)]
     pub(crate) fn prompt_command(
         &mut self,
         prompt: String,
+        set_root_cmd: Option<usize>,
         selectable_commands: Vec<Command>,
         callback: impl Into<SubmitCallback>,
     ) {
@@ -233,9 +245,9 @@ impl CommandLine {
         self.prompt = prompt;
         self.search = true;
         self.set_selectable_commands(selectable_commands);
-        self.enable();
-
         self.submit_callback = Some(callback.into());
+        self.root_command = set_root_cmd;
+        self.enable();
     }
 }
 
@@ -245,6 +257,7 @@ impl Default for CommandLine {
     fn default() -> Self {
         Self {
             enabled: false,
+            is_dirty: true,
             search: true,
             prompt: "Search...".into(),
             commands: Vec::default(),
@@ -350,7 +363,7 @@ impl UpdateableWidget for CommandLine {
     }
 
     async fn update(&mut self) {
-        if !self.enabled || !self.search {
+        if !self.enabled || !self.search || !self.is_dirty {
             return;
         }
 
@@ -371,5 +384,7 @@ impl UpdateableWidget for CommandLine {
         if self.selected_command.is_none() && !self.matched_commands.is_empty() {
             self.selected_command = Some(0);
         }
+
+        self.is_dirty = false;
     }
 }

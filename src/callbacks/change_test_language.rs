@@ -1,18 +1,19 @@
-use std::{ffi::OsString, hash::Hash, sync::Arc};
+use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
 use crate::{
     State,
-    command::Command,
-    notify::{QuickNotify, debug, enotify, error, notify},
+    command::{Command, ROOT_COMMANDS},
+    notify::{debug, error},
     typing_test::word_list,
 };
 
+const ID: &str = "changeLanguage";
 /// Creates the "Change language" command.
 pub(crate) fn create() -> Command {
     Command::new(
-        "changeLanguage".into(),
+        ID.into(),
         "Change language".into(),
         crate::command::CommandGroup::Test,
         async move || Ok(true),
@@ -51,8 +52,18 @@ pub(crate) fn create() -> Command {
             })
             .collect();
 
+            let root = ROOT_COMMANDS
+                .iter()
+                .position(|c| ID.to_string().eq(c.get_id()))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "The command {} is not present in ROOT_COMMANDS, but is called",
+                        ID
+                    )
+                });
             s.lock().await.commandline.prompt_command(
                 "Select language...".into(),
+                Some(root),
                 choices,
                 move |_input, _command_opt| (),
             );

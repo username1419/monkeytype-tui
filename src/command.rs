@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
 use tokio::{spawn, sync::Mutex, task::JoinHandle};
 
-use crate::{State, callbacks::initialize_all};
+use crate::{State, callbacks::initialize_all, notify::debug};
 use std::{fmt::Debug, pin::Pin, sync::Arc};
 
 /// All registered commands, lazily initialized from [`callbacks::initialize_all`].
@@ -115,20 +115,19 @@ pub(crate) trait Fuzzy {
 impl Fuzzy for [Command] {
     async fn find_fuzzy(&self, prompt: &str, options: u8) -> Vec<usize> {
         let binding = prompt.to_ascii_lowercase();
-        let terms = binding.split(char::is_whitespace).collect::<Vec<_>>();
+        let terms = binding.split(char::is_whitespace);
         let mut v = Vec::with_capacity(options as usize);
         for (idx, command) in self.iter().enumerate() {
             let display_name = command.display_name.to_lowercase();
             let terms_command = display_name.split(char::is_whitespace);
-            let match_strength = terms_command.zip(terms.iter()).fold(
-                0,
-                |mut match_strength, (term_command, term_prompt)| {
+            let match_strength = terms_command.fold(0, |mut match_strength, term_command| {
+                for term_prompt in terms.clone() {
                     if term_command.starts_with(term_prompt) {
                         match_strength += term_prompt.len() as u16;
                     }
-                    match_strength
-                },
-            );
+                }
+                match_strength
+            });
 
             if match_strength == 0 {
                 continue;
@@ -151,7 +150,6 @@ impl Fuzzy for [Command] {
             {
                 *stored_strength = match_strength;
                 *stored_idx = idx;
-                break;
             }
         }
 
