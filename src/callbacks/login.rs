@@ -10,6 +10,11 @@ use crate::{
 };
 
 /// Creates the "Login with email and password" command.
+///
+/// When invoked, this handler prompts for the user's email and password through the command
+/// line, logs in via [`crate::auth::login`], then updates the shared
+/// [`AUTHORIZATION`] global and persists the session to disk.
+/// The command is only shown while the user is logged out.
 pub(crate) fn create() -> Command {
     Command::new(
         "login".into(),
@@ -57,6 +62,9 @@ pub(crate) fn create() -> Command {
 
 /// Opens the command line in prompt mode to collect the user's password.
 /// TODO: hide this
+///
+/// Used by the login handler to gather a single prompt value. Blocks until the command line
+/// is submitted, returning the typed text; errors if the prompt is cancelled or empty.
 async fn prompt_user_password(state: &Arc<Mutex<State>>) -> Result<String, String> {
     let (send, recv) = oneshot::channel::<(String, Option<ClonedCommand>)>();
     state
@@ -77,6 +85,9 @@ async fn prompt_user_password(state: &Arc<Mutex<State>>) -> Result<String, Strin
 }
 
 /// Opens the command line in prompt mode to collect the user's email address.
+///
+/// Used by the login handler to gather a single prompt value. Blocks until the command line
+/// is submitted, returning the typed text; errors if the prompt is cancelled or empty.
 async fn prompt_user_email(state: &Arc<Mutex<State>>) -> Result<String, String> {
     let (send, recv) = oneshot::channel::<(String, Option<ClonedCommand>)>();
     state

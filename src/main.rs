@@ -10,6 +10,7 @@ pub(crate) mod test;
 pub(crate) mod tests;
 pub mod traits;
 pub(crate) mod typing_test;
+pub(crate) mod verify;
 
 use std::{
     env,
@@ -67,6 +68,10 @@ enum Action {
 }
 
 /// Central application state shared across async tasks via [`Arc<Mutex<State>>`].
+///
+/// Created once in `main` and cloned into each background task (display, key input, and the
+/// update loop). Guards access to the command line, the shutdown token, and the current
+/// terminal size; the active typing test lives in the separate [`TEST`] global.
 #[derive(Default, Debug)]
 struct State {
     action: Action,
@@ -263,7 +268,10 @@ const SHOW_FPS: bool = true;
 
 /// Renders the terminal UI at [`DISPLAY_RATE`] (120 fps).
 ///
-/// Draws the command line, typing test, and notification overlays on each frame.
+/// Draws the command line, typing test, and notification overlays on each frame. This is the
+/// only task that writes to the terminal; it also records the current terminal size into
+/// `state` and breaks out of its loop once shutdown has been requested (after the update
+/// loop stops the game).
 fn display(
     state: Arc<Mutex<State>>,
     tracker: TaskTracker,
@@ -339,6 +347,10 @@ fn display(
 
 /// Reads terminal key events at [`KEY_UPDATE_RATE`] (1000 fps) and dispatches
 /// them to [`game::event_keypressed`].
+///
+/// Converts raw crossterm key events into [`game::event_keypressed`] calls, each spawned as
+/// its own task so input stays responsive. This task is the sole source of user-initiated
+/// actions feeding the command line and typing test.
 fn key_update(
     state: Arc<Mutex<State>>,
     tracker: TaskTracker,

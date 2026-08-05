@@ -11,6 +11,10 @@ use crate::{
 
 const ID: &str = "changeLanguage";
 /// Creates the "Change language" command.
+///
+/// When invoked, this handler resets the command line, loads every available word list, and
+/// presents a sub-command per language via the command line's prompt mode. Selecting a
+/// language calls [`word_list::update_and_get_words`] to switch the active test language.
 pub(crate) fn create() -> Command {
     Command::new(
         ID.into(),
