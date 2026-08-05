@@ -174,6 +174,10 @@ impl CommandLine {
         remain_enabled: bool,
         callback: impl FnOnce(String, Option<&Command>),
     ) {
+        if self.matched_commands.is_empty() {
+            return;
+        }
+
         // this sucks but any other way would introduce errors
         let _c = ROOT_COMMANDS.clone();
         let command = if self.is_searching() {
