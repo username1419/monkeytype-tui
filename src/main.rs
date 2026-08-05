@@ -284,6 +284,8 @@ fn display(
                 let width = area.width;
                 let height = area.height;
 
+                frame.render_widget(Block::new().on_dark_gray(), area);
+
                 if state.shutdown.is_cancelled() {
                     let mut rect = frame.area();
                     rect = rect.resize(Size::new(40, 4));
