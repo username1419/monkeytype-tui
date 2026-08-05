@@ -65,20 +65,29 @@ debug builds when `cursor_offset > input.len()`.
 
 ### 2. Fuzzy matching (`src/command.rs`)
 
-Rewrite the commented-out tests in `src/tests/fuzzy.rs` against the current `find_fuzzy`
-API (async, returns `Vec<usize>` of indices into the command slice):
+Tests are implemented in `src/tests/fuzzy.rs`. `find_fuzzy` is async and returns a
+`Vec<usize>` of indices into the command slice, sorted by match strength descending (ties
+keep insertion order). The prompt is lowercased and split into terms; each term is matched
+as a prefix of *any* display-name word, and the term's length is summed into the strength.
 
-- Empty / whitespace prompt returns no matches.
-- Case-insensitive prefix matching ("TEST" matches "test mode").
-- Multi-term prompts match later words ("restart test").
+Coverage:
+
+- Empty / whitespace-only prompts return no matches.
+- Case-insensitive per-word prefix matching ("TEST" matches "test mode" and "restart test").
+- Multi-term prompts match words in any position and combine strength ("restart test",
+  "theme dark").
+- Exact display-name matches rank first ("test mode" vs. "test").
 - The `options` limit caps the result count.
-- Results are sorted by match strength descending.
-- Unrelated prompts return no matches.
+- Substrings not at a word start never match ("est" does not match "test").
+- Trailing whitespace in the prompt is ignored.
+- Results are sorted by match strength descending; ties keep insertion order.
 - A command whose `display_condition` returns `false` (or `Err`) is excluded.
 
-Known issue (do not test, but document): `find_fuzzy` at `src/command.rs:166` `break`s out
-of the scan as soon as it replaces a weak match, so later commands are never considered
-once the result window is full — the strongest matches may be missed.
+Known issue (documented in the `options`-limit test, not fixed): once the result window is
+full, a new candidate replaces the weakest entry using `>=` (`src/command.rs:148`), so an
+equal-strength candidate evicts the earliest match. With tied strengths a full window
+therefore keeps the later commands — `find_fuzzy("t", 2)` on the sample set yields `[2, 3]`,
+not `[0, 1]`.
 
 ### 3. Key event routing (`src/game.rs`)
 
@@ -189,7 +198,7 @@ rather than writing one-off handler tests.
 
 Flagged for triage; not fixed here (no production changes allowed):
 
-1. `find_fuzzy` early `break` drops later matches — `src/command.rs:166`.
+1. `find_fuzzy` full-window tie-handling evicts earlier equal-strength matches — `src/command.rs:148`.
 2. `CommandLine::register_character` cursor-offset underflow panic — `src/commandline.rs:117`.
 3. Typing engine unreachable at runtime (`target_word_list` never populated) —
    `src/test.rs`.

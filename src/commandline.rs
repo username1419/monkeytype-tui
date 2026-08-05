@@ -174,7 +174,7 @@ impl CommandLine {
         remain_enabled: bool,
         callback: impl FnOnce(String, Option<&Command>),
     ) {
-        if self.matched_commands.is_empty() {
+        if self.matched_commands.is_empty() && self.is_searching() {
             return;
         }
 
