@@ -1,19 +1,24 @@
-# Functionality Test Plan
+# Testing
 
-A plan for exercising the application's behavior through functionality tests. Tests are
-described here but **not yet implemented**. The goal is to pin down how the app actually
-functions today, before (or alongside) finishing incomplete features.
+How the application is tested today. Implementation lives in `src/tests/` (unit tests in a
+binary crate) alongside the code it exercises; this document describes what is covered, what
+is intentionally not covered yet, and the constraints the tests work under.
+
+## Status
+
+- `cargo test` runs **82 tests**: 81 pass and 1 is ignored (a live-network GitHub test).
+- Most modules have real, passing coverage in `src/tests/`.
+- The typing engine (`src/test.rs`) and the new `src/verify.rs` are **work in progress** and
+  must not be tested yet (see [WIP — do not test](#wip--do-not-test)).
+- A few behaviors remain untested (private globals/queues, network paths, and edge cases
+  that would require a refactor). These are documented below.
 
 ## Scope & constraints
 
-- The crate is a binary crate (`src/main.rs`), so there is no library target for
-  integration tests to import. Tests live as unit tests under `src/tests/`, matching the
-  existing pattern.
-- **No production code changes**: every described test must work against the current API.
-  Behavior that cannot be reached without a refactor is documented as *blocked* rather
-  than worked around.
+- The crate is a binary crate (`src/main.rs`), so there is no library target for integration
+  tests to import. Tests live as unit tests under `src/tests/`, matching the existing pattern.
 - **Network policy**: functionality that depends on live HTTP (monkeytype auth scraping,
-  login/token refresh, GitHub tags/asset sync) is kept `#[ignore]`d or deferred. A future
+  login/token refresh, GitHub tags/asset sync) stays `#[ignore]`d or deferred. A future
   httpmock-based harness would require injecting base URLs into `src/auth.rs` and
   `src/github.rs`, which is out of scope.
 - **Shared globals**: `TEST`, `WORD_LIST`, `AUTHORIZATION`, `NOTIFICATIONS`, and the
@@ -23,59 +28,62 @@ functions today, before (or alongside) finishing incomplete features.
 
 ## Testability matrix
 
-| Module | Functionality | Testable now | Notes |
-|--------|---------------|--------------|-------|
-| `commandline.rs` | cursor input, delete, word-delete, prompt mode, search/fuzzy submit | Yes | All methods `pub(crate)`; observe input via the submit callback (no input getter) |
-| `command.rs` | fuzzy matching (`find_fuzzy`) | Yes | Rewrite the commented-out `src/tests/fuzzy.rs` as `#[tokio::test]` |
-| `game.rs` | key event routing | Partial | `TEST`-branch routing not observable (no getter on `Test`); commandline branch is |
-| `notify.rs` | builder, expiry, Display formats | Partial | Queue drain/expiry not observable (`NOTIFICATIONS` is private) |
-| `typing_test/word_list.rs` | load language, getters, error paths | Yes (caveats) | Fixtures written to the real `CACHE_DIR`; `WORD_LIST` global is shared |
-| `auth.rs` | `is_logged_in`, expiry, `save_to_disk` | Yes (non-network) | Network login/refresh/`get_api_key` deferred |
-| `github.rs` | deserialization | Yes | tags/download are network (`#[ignore]`) |
-| `test.rs` (typing engine) | word advance, targeting | Blocked | `target_word_list` is private and never seeded; `register_character` panics on an empty list |
-| `callbacks/*` | command handlers | Partial | `change_test_language` is unfinished; see [Callback framework](#callback-framework) |
+| Module | Functionality | Coverage | Notes |
+|--------|---------------|----------|-------|
+| `commandline.rs` | cursor input, delete, word-delete, prompt mode, search/fuzzy submit | Tested | `src/tests/commandline.rs`; input observed via the submit callback (no input getter) |
+| `command.rs` | fuzzy matching (`find_fuzzy`) | Tested | `src/tests/fuzzy.rs` (`#[tokio::test]`) |
+| `game.rs` | key event routing | Tested | `src/tests/game.rs`; `TEST`-branch routing not observable (no getter on `Test`) |
+| `notify.rs` | builder, expiry, Display, macros | Tested | `src/tests/notify.rs`; queue drain/expiry not observable (`NOTIFICATIONS` private) |
+| `typing_test/word_list.rs` | load language, getters, error paths | Tested | `src/tests/word_list.rs`; fixtures use the real `CACHE_DIR`; `WORD_LIST` global shared |
+| `typing_test/random.rs` | XorShift128+ RNG, seed derivation, output ranges | Tested | Inline `#[cfg(test)]` module (below); deterministic for constructed states |
+| `auth.rs` | now/expiry getters, parse, `is_logged_in`, `save_to_disk`, cached API key | Tested | `src/tests/auth.rs`; network login/refresh/deferred |
+| `github.rs` | deserialization | Tested | `src/tests/github.rs`; tags/download are network (`#[ignore]`) |
+| `test.rs` (typing engine) | word advance, targeting | **Not tested (WIP)** | See [WIP — do not test](#wip--do-not-test) |
+| `verify.rs` | result verification | **Not tested (WIP)** | Stub behind `todo!()`; see above |
+| `callbacks/*` | command handlers | Framework built | `src/tests/callback_framework.rs`; per-command tests added as handlers land |
 
 ## Per-module test descriptions
 
 ### 1. Command line (`src/commandline.rs`)
 
-All methods are `pub(crate)`; a `Default` impl exists. Because there is no getter for the
-input string, tests observe state through the `submit` callback.
+`src/tests/commandline.rs`. All methods are `pub(crate)`; a `Default` impl exists. Because
+there is no getter for the input string, tests observe state through the `submit` callback
+(the helper `observe_input` toggles out of search mode, submits, and captures the callback).
 
-- `enable` / `disable` / `is_enabled` / `is_searching` state transitions; `disable` resets
-  the widget (input cleared, back to search mode) unless it is in search mode.
-- `toggle_searching` flips search mode.
-- Character insertion appends at the cursor (`cursor_offset == 0`); `register_move_left` /
-  `register_move_right` shift the cursor and change where the next character lands.
-- `register_delete_character` removes the character before the cursor; deleting from an
-  empty input disables the command line.
-- `register_delete_word` removes the word before the cursor (observe final input and the
-  resulting `cursor_offset`).
-- `prompt_input` switches to prompt mode (search disabled, enabled, custom prompt) and sets
-  a one-shot submit callback.
-- `submit` in prompt mode invokes the callback with the input text; in search mode it
-  invokes the callback with the selected matched command. Submitting with
-  `remain_enabled = false` disables the command line.
-- Search mode: after typing a query, `update()` populates `matched_commands` via
-  `find_fuzzy` over `ROOT_COMMANDS`; submitting then returns the selected command.
+Covered:
 
-Known issue (do not test, but document): `register_character` at
-`src/commandline.rs:117` computes `input.len() - cursor_offset`, which underflows/panics in
-debug builds when `cursor_offset > input.len()`.
+- `default_state_is_disabled_and_searching` and `enable_and_disable_flip_enabled_state`.
+- `disable_in_search_mode_does_not_reset` vs `disable_in_prompt_mode_resets_input`.
+- `toggle_searching_flips_search_mode`.
+- `characters_append_at_cursor_offset_zero`; `moving_cursor_left_changes_insertion_point`;
+  `moving_cursor_right_restores_insertion_point`.
+- `delete_character_removes_char_before_cursor`;
+  `delete_character_on_empty_input_disables_command_line`.
+- `delete_word_removes_word_before_cursor` (observe final input and the resulting
+  `cursor_offset`, so typing appends after it).
+- `prompt_input_switches_to_prompt_mode` (search disabled, enabled, custom prompt).
+- `submit_in_prompt_mode_invokes_oneshot_callback_with_input` and
+  `submit_with_remain_enabled_keeps_command_line_enabled`.
+- `search_mode_update_populates_matches_and_submit_returns_selected_command` (ties in to
+  `find_fuzzy` over `ROOT_COMMANDS`); `search_mode_submit_without_matches_disables_command_line`.
+
+Known issue (present, may be fixed in a future change, do not rely on it in tests):
+`register_character` at `src/commandline.rs:122` computes `input.len() - cursor_offset`,
+which underflows/panics in debug builds when `cursor_offset > input.len()`.
 
 ### 2. Fuzzy matching (`src/command.rs`)
 
-Tests are implemented in `src/tests/fuzzy.rs`. `find_fuzzy` is async and returns a
-`Vec<usize>` of indices into the command slice, sorted by match strength descending (ties
-keep insertion order). The prompt is lowercased and split into terms; each term is matched
-as a prefix of *any* display-name word, and the term's length is summed into the strength.
+`src/tests/fuzzy.rs` (`#[tokio::test]`). `find_fuzzy` is async and returns a `Vec<usize>` of
+indices into the command slice, sorted by match strength descending (ties keep insertion
+order). The prompt is lowercased and split into terms; each term matches as a prefix of *any*
+display-name word, and the term's length is summed into the strength.
 
-Coverage:
+Covered:
 
 - Empty / whitespace-only prompts return no matches.
 - Case-insensitive per-word prefix matching ("TEST" matches "test mode" and "restart test").
 - Multi-term prompts match words in any position and combine strength ("restart test",
-  "theme dark").
+  "theme dark"); terms can land on different words.
 - Exact display-name matches rank first ("test mode" vs. "test").
 - The `options` limit caps the result count.
 - Substrings not at a word start never match ("est" does not match "test").
@@ -83,130 +91,167 @@ Coverage:
 - Results are sorted by match strength descending; ties keep insertion order.
 - A command whose `display_condition` returns `false` (or `Err`) is excluded.
 
-Known issue (documented in the `options`-limit test, not fixed): once the result window is
-full, a new candidate replaces the weakest entry using `>=` (`src/command.rs:148`), so an
+Known issue (present, may be fixed in a future change): once the result window is full, a
+new candidate replaces the weakest entry using `>=` (`src/command.rs:149`), so an
 equal-strength candidate evicts the earliest match. With tied strengths a full window
 therefore keeps the later commands — `find_fuzzy("t", 2)` on the sample set yields `[2, 3]`,
-not `[0, 1]`.
+not `[0, 1]`. Tests currently assert the implemented behavior accordingly.
 
 ### 3. Key event routing (`src/game.rs`)
 
-`event_keypressed` takes an `Arc<Mutex<State>>`; `State` is defined at the crate root, so
-its fields are reachable from tests. The `TEST` branch is not observable, so tests focus on
-the commandline branch and global side effects:
+`src/tests/game.rs`. `event_keypressed` takes an `Arc<Mutex<State>>`; `State` is defined at
+the crate root, so its fields are reachable from tests. The `TEST` branch is not observable,
+so tests focus on the commandline branch and global side effects:
 
-- `Ctrl+Q` cancels `state.shutdown`.
-- `Esc` toggles the command line enabled state.
+- `ctrl_q_cancels_shutdown`.
+- `esc_toggles_command_line_enabled_state`.
 - A character routes to the command line when enabled (observe via submit) and to `TEST`
-  when disabled (currently only assertable as "no panic"; see blocked `test.rs`).
-- `Shift+char` routes the uppercased character.
-- `Enter` submits the command line when enabled (and disables it after `submit(false)`);
-  it is a no-op when disabled.
-- `Left`/`Right`/`Up`/`Down` only affect the command line when enabled.
-- `Ctrl+Backspace` / `Ctrl+H` route to word deletion.
+  when disabled (asserted only as "no panic"; see WIP `test.rs`).
+- `shift_character_routes_uppercased_character`.
+- `enter_submits_and_does_not_disable_command_line_when_enabled`; `enter_is_a_noop_when_command_line_disabled`.
+- Arrow keys only affect the command line when enabled (`left_arrow_moves_cursor_in_command_line`,
+  `arrow_keys_are_noops_when_command_line_disabled`).
+- `ctrl_backspace_deletes_word_in_command_line` / `ctrl_h_deletes_word_in_command_line`.
 
 ### 4. Notifications (`src/notify.rs`)
 
-- `NotificationBuilder` defaults (empty title/message, zero duration, `Info` level) and
-  fluent setters.
-- `build()` sets `expires_at` to `now + duration` (assert within a small tolerance).
-- `Display` for `Notification` ("LEVEL: message") and each `NotifLevel` label
-  (`INFO`/`SUCCESS`/`WARNING`/`DEBUG`/`ERROR`).
-- `debug!` / `error!` / `enotify!` / `wnotify!` / `todo!` fire without panicking;
-  `debug!` and `error!` pass the expression value through.
+`src/tests/notify.rs`.
 
-Queue drain and expiry removal are not observable (the `NOTIFICATIONS` static and the
-channel receiver are private), so they are intentionally not tested.
+- `builder_defaults_are_empty_message_and_info_level` and `builder_fluent_setters_are_applied`.
+- `notification_display_shows_level_and_message` and `notif_level_display_labels`
+  (`INFO`/`SUCCESS`/`WARNING`/`DEBUG`/`ERROR`).
+- `debug_macro_fires_and_returns_value`, `error_macro_fires_and_returns_value`, and
+  `enotify_wnotify_and_todo_macros_fire_without_panicking`.
+
+Queue drain and expiry removal are not observable (the `NOTIFICATIONS` static and the channel
+receiver are private), so they are intentionally not tested.
 
 ### 5. Word lists (`src/typing_test/word_list.rs`)
 
-- `update_and_get_words` parses a fixture and returns its words. It appends the `.json`
-  extension to the given name (`src/typing_test/word_list.rs:122`), so test fixtures are
-  stored on disk as `<name>.json`.
-- Getters reflect the loaded fixture: `get_language`, `get_word_list`, `is_rtl`,
-  `is_ligature_aware`, `is_support_lazy_mode`, `is_order_by_freq`, `get_bcp47`.
-- `update_and_get_words` on a missing file returns `Err`.
-- A malformed fixture returns `Err` (via `enotify!` + `Err`).
-- `get_language` / `get_word_list` return `None` before any load — this assertion is only
-  reliable when no other test has loaded a list (shared `WORD_LIST` global).
+`src/tests/word_list.rs`.
 
-### 6. Auth (`src/auth.rs`)
+- `update_and_get_words_parses_fixture_and_populates_getters` — parses a fixture and
+  reflects it via the getters (`get_language`, `get_word_list`, `is_rtl`,
+  `is_ligature_aware`, `is_support_lazy_mode`, `is_order_by_freq`, `get_bcp47`). The `update_and_get_words`
+  appends `.json` to the given name, so fixtures are stored as `<name>.json`.
+- `update_and_get_words_returns_err_for_missing_file` and
+  `update_and_get_words_returns_err_for_malformed_fixture`.
 
-Extend the existing `src/tests/auth.rs`:
+The "`get_language`/`get_word_list` return `None` before any load" assertion is only reliable
+when no other test has loaded a list (shared `WORD_LIST` global) and is therefore not
+currently exercised.
 
-- `is_logged_in` is `true` only when a refresh token is present.
-- `get_expire_instant` / `is_access_expired` behave correctly for future and past
-  `last_access_timestamp` / `expires_in` combinations.
-- `save_to_disk` writes `refresh_token` to `<data>/refresh_token` with the expected JSON
-  shape (clean up the file afterwards).
-- `get_api_key` reads the cached API key from `<data>/apikey` without network (skipped when
-  the cache has never been populated).
+### 6. Random number generator (`src/typing_test/random.rs`)
+
+Tests live in an inline `#[cfg(test)]` module in the source file (not under `src/tests/`). The
+generator uses `wrapping_mul`/`wrapping_add`, so every operation is overflow-safe and the tests
+run identically in debug and release builds (unlike V8's bare `*`/`+` reference arithmetic).
+
+Covered:
+
+- `murmur_hash3_of_zero_is_zero`, and
+  `murmur_hash3_is_avalanching_and_deterministic` (same input reproduces, one-bit input
+  difference changes the output).
+- `from_seed_derives_distinct_nonzero_states`; `same_seed_yields_same_states`;
+  `different_seeds_yield_different_states`.
+- `next_u64_known_sequence_for_state_0_1` and `next_u64_known_sequence_for_state_1_2` —
+  hand-verified reference sequences for constructed states.
+- `next_f64_stays_within_unit_interval` and `next_f64_derives_from_next_u64` (checks the
+  `>> 11` / `2^53` normalization).
+- `identical_states_reproduce_identical_sequences`;
+  `sequences_differ_across_distinct_states`; `sequence_is_not_trivially_constant`.
+
+### 7. Auth (`src/auth.rs`)
+
+`src/tests/auth.rs`.
+
+- `is_logged_in_requires_refresh_token`.
+- `authorization_is_not_expired_when_fresh` and
+  `access_expiry_depends_on_timestamp_and_duration` (future/past
+  `last_access_timestamp`/`expires_in` combinations).
+- `authorization_getters_return_constructed_values` and
+  `authorization_update_merges_non_default_fields`.
+- `from_login_response_parses_firebase_sign_in_json`, `from_refresh_response_parses_token_json`,
+  and `from_login_response_rejects_invalid_json`.
+- `save_to_disk_writes_expected_refresh_token_json` (writes to `<data>/refresh_token`, cleans
+  up afterwards).
+- `get_api_key_reads_cached_apikey` reads the cached key from `<data>/apikey` without network.
 
 Network paths — `get_api_key` scraping, `login`, `refresh_from_file`/`refresh_non_blocking`
 — stay `#[ignore]` / deferred to httpmock.
 
-### 7. GitHub assets (`src/github.rs`)
+### 8. GitHub assets (`src/github.rs`)
 
-- Deserialization tests already exist and are retained.
-- `has_version_changed` returns `Ok(true)` when `<data>` is empty (no network). This is
-  environment-dependent and only reliable with an empty real data dir.
-- `get_tags` / `download_resources_recursive` remain `#[ignore]` (network).
+`src/tests/github.rs`.
 
-### 8. Typing engine (`src/test.rs`) — blocked
+- `github_file_object_deserialize` and `github_dir_object_deserialize`.
+- `has_version_changed_true_when_data_dir_empty` (environment-dependent, reliable with an
+  empty real data dir).
+- `download_test` is `#[ignore]`d as network; `get_tags`/`download_resources_recursive` remain
+  network-only.
 
-The engine's core behavior cannot be exercised through the current API:
+## WIP — do not test
 
-- Fields are private and `target_word_list` is never populated at runtime.
-- `register_character` indexes `target_word_list[current_word_list.len() - 1]`
-  (`src/test.rs:36`), which panics on the very first character when the list is empty.
+The typing engine (`src/test.rs`) and the new `src/verify.rs` are **work in progress** and must
+**not** be tested yet:
 
-Desired tests (deferred until a seed constructor such as `Test::with_target_words(...)`
-exists): character append, auto-advance when the current word matches the target, backspace,
-word-delete, display string joining, and `reset`. No production change is allowed under the
-current constraint, so these stay documented and unimplemented.
+- `Test::register_character` indexes `target_word_list[current_word_list.len() - 1]`
+  (`src/test.rs:61`), which panics on the very first character when the list is empty, and the
+  target list is never populated at runtime.
+- `generate_test_record` is a `todo!()`, and `verify::verify_and_update` (`src/verify.rs`) is a
+  `todo!()` stub.
+- There is no seed constructor or getter that would let tests observe the engine without
+  hitting the panics above.
+
+Do not write tests for the typing engine or verification until the `todo!()`s are implemented
+and a seed path (such as `Test::with_target_words(...)`) exists. Desired future coverage:
+character append, auto-advance when the current word matches the target, backspace, word-delete,
+display string joining, and `reset`. This area may change substantially, so any test written now
+would be testing unstable code.
 
 ## Callback framework
 
-`change_test_language` (`src/callbacks/change_test_language.rs`) is **not finished** — its
-handler is currently a stub that only resets the command line. Do not write tests that
-assume behavior that does not exist yet.
+`change_test_language` (`src/callbacks/change_test_language.rs`) is **implemented**: it resets
+the command line, loads the available word lists, builds a subcommand per language, and drives
+the selection via `prompt_command`.
 
-Instead, design a reusable framework for testing command handlers (the `Command` /
-`CommandCallback` plumbing in `src/command.rs`) so that once commands are implemented they
-can be verified uniformly. The framework should cover:
+A reusable framework for testing command handlers lives in `src/tests/callback_framework.rs`
+and covers:
 
 - Constructing a `Command` and invoking its handler via `Command::call(state).await`,
   asserting the returned `Result`.
-- Driving the one-shot prompt flow (`oneshot` channels used by
-  `src/callbacks/login.rs`) from the test side so handler input can be simulated.
-- Injecting fake authorization / state so commands can be tested without real sessions.
-- Asserting notification side effects (requires exposing the notification queue or a
-  test observer).
+- Driving the one-shot prompt flow (`oneshot` channels, as in `src/callbacks/login.rs`) from the
+  test side via the `drive_prompt_input` helper so handler input can be simulated.
+- Injecting a fake `AUTHORIZATION` so commands can be tested without a real session
+  (restoring defaults afterwards).
 
-This framework should be built in `src/tests/` alongside the first real command tests,
-rather than writing one-off handler tests.
+Notification-side-effect assertions are intentionally absent: the notification queue is private
+and no test observer exists yet. As other command handlers land, add their tests using this
+framework.
 
 ## Shared test infrastructure
 
-- No temp-dir override exists (would require a production change), so fixtures that touch
-  `CACHE_DIR` / `DATA_DIR` use unique names and always clean up in the test body.
-- Globals (`TEST`, `WORD_LIST`, `AUTHORIZATION`, `NOTIFICATIONS`) are shared across tests;
-  where unavoidable, document the ordering assumption rather than resetting the globals.
+- No temp-dir override exists, so fixtures that touch `CACHE_DIR` / `DATA_DIR` use unique names
+  and always clean up in the test body.
+- Globals (`TEST`, `WORD_LIST`, `AUTHORIZATION`, `NOTIFICATIONS`) are shared across tests; where
+  unavoidable, document the ordering assumption rather than resetting the globals.
 - Async tests use `#[tokio::test]`; network tests use `#[ignore]`.
 
-## Known issues surfaced by this plan
+## Known issues
 
-Flagged for triage; not fixed here (no production changes allowed):
+Present today; may be fixed in future work — flagged for triage, not relied on by tests:
 
-1. `find_fuzzy` full-window tie-handling evicts earlier equal-strength matches — `src/command.rs:148`.
-2. `CommandLine::register_character` cursor-offset underflow panic — `src/commandline.rs:117`.
-3. Typing engine unreachable at runtime (`target_word_list` never populated) —
-   `src/test.rs`.
+1. `find_fuzzy` full-window tie-handling evicts earlier equal-strength matches —
+   `src/command.rs:149`.
+2. `CommandLine::register_character` cursor-offset underflow panic —
+   `src/commandline.rs:122`.
+3. Typing engine unreachable at runtime (`target_word_list` never populated) and full of
+   `todo!()`s — `src/test.rs`, `src/verify.rs` (WIP).
 
 ## Network / deferred tests
 
-Would require httpmock (or similar) plus URL injection into `src/auth.rs` and
-`src/github.rs`; deferred by policy:
+Would require httpmock (or similar) plus URL injection into `src/auth.rs` and `src/github.rs`;
+deferred by policy:
 
 - `get_api_key` full scrape pipeline.
 - `login` (email + password) and token refresh.
@@ -215,6 +260,6 @@ Would require httpmock (or similar) plus URL injection into `src/auth.rs` and
 
 ## Verification
 
-- `cargo test` — unit tests.
+- `cargo test` — unit tests (82 tests: 81 pass, 1 ignored).
 - `cargo test -- --ignored` — opt-in network tests.
 - `cargo clippy` and `cargo doc --no-deps` — lint and doc integrity.
