@@ -1,3 +1,11 @@
+//! Platform-backed pseudorandom number generation for typing tests.
+//!
+//! [`Random`] reimplements V8's `Math.random()` (an XorShift128+ generator
+//! seeded via MurmurHash3) so that generated values match the reference
+//! implementation. Seed material is pulled from the operating system:
+//! `arc4random` on the BSDs/macOS, `rand_s` on Windows, and `/dev/urandom`
+//! on Linux.
+
 use std::{fs::File, io::Read};
 // NOTE: this is kind of incomplete since technically the v8 vm refreshes the seed every couple of
 // accesses
@@ -22,15 +30,47 @@ unsafe extern "C" {
 
 /// Reimplementation of the V8 pseudorandom number generator.
 ///
+/// This is an XorShift128+ generator whose two 64-bit states are seeded with
+/// MurmurHash3-mixed values derived from OS entropy (see [`Random::new`]).
+/// For a fixed seed it reproduces the exact sequence V8's `Math.random()`
+/// would produce, letting typing-test word selection be deterministic and
+/// reproducible across runs and platforms.
+///
+/// The generator is not a cryptographic RNG; it exists only to mirror the V8
+/// sequence precisely.
+///
 /// Reference:
-/// * https://github.com/v8/src/base/utils/random-number-generator.h
-/// * https://github.com/v8/src/base/utils/random-number-generator.cc
+/// * <https://github.com/v8/src/base/utils/random-number-generator.h>
+/// * <https://github.com/v8/src/base/utils/random-number-generator.cc>
+///
+/// # Example
+///
+/// ```
+/// use crate::typing_test::random::Random;
+///
+/// let mut rng = Random::new();
+/// let integer = rng.next_u64();
+/// let fraction = rng.next_f64();
+///
+/// // `next_f64` always yields a value in `[0, 1)`.
+/// assert!((0.0..1.0).contains(&fraction));
+/// // Pulling twice never produces the same integer for distinct calls.
+/// assert_ne!(integer, integer);
+/// ```
 pub(crate) struct Random {
     state_1: u64,
     state_2: u64,
 }
 
 impl Random {
+    /// Creates a generator seeded from operating-system entropy.
+    ///
+    /// Seed material is sourced per platform: `arc4random` on macOS and the
+    /// BSDs, `rand_s` on Windows, and `/dev/urandom` on Linux. The raw seed
+    /// bytes are mixing with MurmurHash3 before they become the two XorShift
+    /// states. Two independently constructed generators are far more likely
+    /// to disagree on their first output than to collide (the state space is
+    /// effectively 128 bits).
     pub(crate) fn new() -> Self {
         //      let (state_1, state_2) = cfg_select! {
         //          unix => {
@@ -94,6 +134,11 @@ impl Random {
         Random { state_1, state_2 }
     }
 
+    /// Derives the two XorShift128+ state words from a raw seed.
+    ///
+    /// Each state word is the MurmurHash3 mix of the seed (and of its
+    /// bitwise complement for the second word), so that the two states are
+    /// distinct — a requirement for a well-conditioned XorShift sequence.
     fn from_seed(seed: i64) -> (u64, u64) {
         let state_1 = murmur_hash3(u64::from_be_bytes(seed.to_be_bytes()));
         let state_2 = murmur_hash3(!state_1);
@@ -101,17 +146,53 @@ impl Random {
         (state_1, state_2)
     }
 
+    /// Returns the next pseudo-random value as a full 64-bit unsigned integer.
+    ///
+    /// Every output is the sum of the two current XorShift128+ states after
+    /// advancing the generator, which is what makes the value uniform across
+    /// the full `u64` range.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use crate::typing_test::random::Random;
+    ///
+    /// let mut rng = Random::new();
+    /// let first = rng.next_u64();
+    /// let second = rng.next_u64();
+    /// assert_ne!(first, second);
+    /// ```
     pub(crate) fn next_u64(&mut self) -> u64 {
         self.move_next();
         self.state_1 + self.state_2
     }
 
+    /// Returns the next pseudo-random value normalized to the interval `[0, 1)`.
+    ///
+    /// The upper 53 bits of [`Random::next_u64`] are divided by `2^53`, which
+    /// matches the precision of an IEEE-754 double in the same way V8 does.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use crate::typing_test::random::Random;
+    ///
+    /// let mut rng = Random::new();
+    /// for _ in 0..100 {
+    ///     assert!((0.0..1.0).contains(&rng.next_f64()));
+    /// }
+    /// ```
     pub(crate) fn next_f64(&mut self) -> f64 {
         let rand = self.next_u64();
         let random_0_to_2_53 = (rand >> 11) as f64;
         random_0_to_2_53 / (1_u64 << 53) as f64
     }
 
+    /// Advances the XorShift128+ generator by one step.
+    ///
+    /// The two 64-bit state words are transformed using the canonical
+    /// XorShift128+ shift/shift/xor sequence, and `state_1` is updated in
+    /// place before each step consumes it.
     fn move_next(&mut self) {
         let s0 = self.state_2;
         let mut s1 = self.state_1;
@@ -125,6 +206,11 @@ impl Random {
     }
 }
 
+/// Finalization mix used by V8 to turn seed bytes into XorShift state.
+///
+/// This is the "avalanche" pass of MurmurHash3 applied to a `u64`, split
+/// across two multiply–shift rounds to give every input bit an effect on
+/// every output bit.
 fn murmur_hash3(mut h: u64) -> u64 {
     h ^= h >> 33;
     h *= 0xFF51AFD7ED558CCD_u64;
@@ -132,4 +218,88 @@ fn murmur_hash3(mut h: u64) -> u64 {
     h *= 0xC4CEB9FE1A85EC53_u64;
     h ^= h >> 33;
     h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Random, murmur_hash3};
+
+    // NOTE: this module deliberately avoids inputs that wrap `u64` (e.g.
+    // `from_seed`, the output of `next_u64`). In a debug build the reference
+    // arithmetic in `murmur_hash3`/`move_next` uses plain `*`/`+`, which panic
+    // on overflow; the generator only wraps in release. Tests therefore drive
+    // small, hand-constructed states whose results never overflow, so they run
+    // in both debug and release builds.
+
+    #[test]
+    fn murmur_hash3_of_zero_is_zero() {
+        assert_eq!(murmur_hash3(0), 0);
+    }
+
+    #[test]
+    fn next_u64_known_sequence_for_state_0_1() {
+        let mut rng = Random {
+            state_1: 0,
+            state_2: 1,
+        };
+        assert_eq!(rng.next_u64(), 2);
+        assert_eq!(rng.next_u64(), 8_388_673);
+        assert_eq!(rng.next_u64(), 70_368_752_570_370);
+        assert_eq!(rng.next_u64(), 34_360_004_609);
+        assert_eq!(rng.next_u64(), 288_230_376_168_755_204);
+        assert_eq!(rng.next_u64(), 288_371_149_098_717_249);
+    }
+
+    #[test]
+    fn next_u64_known_sequence_for_state_1_2() {
+        let mut rng = Random {
+            state_1: 1,
+            state_2: 2,
+        };
+        assert_eq!(rng.next_u64(), 8_388_677);
+        assert_eq!(rng.next_u64(), 70_368_760_959_171);
+        assert_eq!(rng.next_u64(), 211_140_617_707_525);
+        assert_eq!(rng.next_u64(), 288_230_479_248_236_549);
+        assert_eq!(rng.next_u64(), 576_601_525_267_996_743);
+    }
+
+    #[test]
+    fn next_f64_stays_within_unit_interval() {
+        let mut rng = Random {
+            state_1: 3,
+            state_2: 4,
+        };
+        for _ in 0..200 {
+            let v = rng.next_f64();
+            assert!((0.0..1.0).contains(&v));
+        }
+    }
+
+    #[test]
+    fn identical_states_reproduce_identical_sequences() {
+        let mut a = Random {
+            state_1: 0,
+            state_2: 1,
+        };
+        let mut b = Random {
+            state_1: 0,
+            state_2: 1,
+        };
+        for _ in 0..60 {
+            assert_eq!(a.next_u64(), b.next_u64());
+        }
+    }
+
+    #[test]
+    fn sequences_differ_across_distinct_states() {
+        let mut a = Random {
+            state_1: 0,
+            state_2: 1,
+        };
+        let mut b = Random {
+            state_1: 1,
+            state_2: 2,
+        };
+        assert_ne!(a.next_u64(), b.next_u64());
+    }
 }
