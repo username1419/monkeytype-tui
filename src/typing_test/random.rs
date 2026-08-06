@@ -164,7 +164,7 @@ impl Random {
     /// ```
     pub(crate) fn next_u64(&mut self) -> u64 {
         self.move_next();
-        self.state_1 + self.state_2
+        self.state_1.wrapping_add(self.state_2)
     }
 
     /// Returns the next pseudo-random value normalized to the interval `[0, 1)`.
@@ -213,9 +213,9 @@ impl Random {
 /// every output bit.
 fn murmur_hash3(mut h: u64) -> u64 {
     h ^= h >> 33;
-    h *= 0xFF51AFD7ED558CCD_u64;
+    h = h.wrapping_mul(0xFF51AFD7ED558CCD);
     h ^= h >> 33;
-    h *= 0xC4CEB9FE1A85EC53_u64;
+    h = h.wrapping_mul(0xC4CEB9FE1A85EC53);
     h ^= h >> 33;
     h
 }
@@ -224,16 +224,40 @@ fn murmur_hash3(mut h: u64) -> u64 {
 mod tests {
     use super::{Random, murmur_hash3};
 
-    // NOTE: this module deliberately avoids inputs that wrap `u64` (e.g.
-    // `from_seed`, the output of `next_u64`). In a debug build the reference
-    // arithmetic in `murmur_hash3`/`move_next` uses plain `*`/`+`, which panic
-    // on overflow; the generator only wraps in release. Tests therefore drive
-    // small, hand-constructed states whose results never overflow, so they run
-    // in both debug and release builds.
+    // NOTE:
+    // This implementation deliberately uses `wrapping_mul`/`wrapping_add` instead of `*`/`+` since
+    // it replicates the same behavior as original V8 implementation.
 
     #[test]
     fn murmur_hash3_of_zero_is_zero() {
         assert_eq!(murmur_hash3(0), 0);
+    }
+
+    #[test]
+    fn murmur_hash3_is_avalanching_and_deterministic() {
+        let a = murmur_hash3(123_456_789_012);
+        let b = murmur_hash3(123_456_789_012);
+        let c = murmur_hash3(123_456_789_013);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn from_seed_derives_distinct_nonzero_states() {
+        let (s1, s2) = Random::from_seed(0xDEAD_BEEF_CAFE_F00Du64 as i64);
+        assert_ne!(s1, s2);
+        assert_ne!(s1, 0);
+        assert_ne!(s2, 0);
+    }
+
+    #[test]
+    fn same_seed_yields_same_states() {
+        assert_eq!(Random::from_seed(42), Random::from_seed(42),);
+    }
+
+    #[test]
+    fn different_seeds_yield_different_states() {
+        assert_ne!(Random::from_seed(42), Random::from_seed(43),);
     }
 
     #[test]
@@ -276,6 +300,22 @@ mod tests {
     }
 
     #[test]
+    fn next_f64_derives_from_next_u64() {
+        let mut a = Random {
+            state_1: 3,
+            state_2: 4,
+        };
+        let mut b = Random {
+            state_1: 3,
+            state_2: 4,
+        };
+        for _ in 0..50 {
+            let expected = ((b.next_u64() >> 11) as f64) / (1_u64 << 53) as f64;
+            assert_eq!(a.next_f64(), expected);
+        }
+    }
+
+    #[test]
     fn identical_states_reproduce_identical_sequences() {
         let mut a = Random {
             state_1: 0,
@@ -301,5 +341,16 @@ mod tests {
             state_2: 2,
         };
         assert_ne!(a.next_u64(), b.next_u64());
+    }
+
+    #[test]
+    fn sequence_is_not_trivially_constant() {
+        let mut rng = Random {
+            state_1: 0,
+            state_2: 1,
+        };
+        let first = rng.next_u64();
+        let second = rng.next_u64();
+        assert_ne!(first, second);
     }
 }
