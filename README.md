@@ -16,3 +16,5 @@ Dont report it to the monkeytype repo, report it here instead.
 
 ## Warnings
 You may get banned by anticheat while using this. You have my warnings, and I hold no liability if that happens.
+
+Using an account with leaderboard opted out with this application is recommended
