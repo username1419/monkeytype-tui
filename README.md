@@ -18,3 +18,29 @@ Dont report it to the monkeytype repo, report it here instead.
 You may get banned by anticheat while using this. You have my warnings, and I hold no liability if that happens.
 
 Using an account with leaderboard opted out with this application is recommended
+
+## Building
+### Linux
+0. Install `cargo` if you don't have it:
+```bash
+curl https://sh.rustup.rs -sSf | sh
+```
+1. Install required dependencies:
+```bash
+sudo apt install build-essential pkg-config libssl-dev
+```
+2. Build program
+```bash
+cargo build --release
+```
+
+The resulting binary will be located at `target/release/typing`. You can move it to `$HOMEDIR/.local/bin/` to run anywhere:
+```bash
+mv target/release/typing $HOMEDIR/.local/bin/
+```
+
+### Windows
+Good luck you're on your own
+
+### BSDs
+You can figure this out yourself
